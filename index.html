@@ -103,7 +103,7 @@
   }
 
   async function getLiveVideos(channelId) {
-    const r = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&eventType=live&type=video&maxResults=10&key=${API_KEY}`);
+    const r = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&eventType=live&type=video&maxResults=20&key=${API_KEY}`);
     const d = await r.json();
     if (d.error) throw new Error(d.error.message);
     return d.items || [];

@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>라이브 연결 중...</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a0a;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      text-align: center;
+      padding: 40px 24px;
+      max-width: 480px;
+      width: 100%;
+    }
+    .live-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      background: #ff3b3b;
+      border-radius: 50%;
+      margin-right: 8px;
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+    .status {
+      font-size: 13px;
+      color: #888;
+      margin-bottom: 32px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .channel-name {
+      font-size: 20px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+    .loading-text {
+      font-size: 13px;
+      color: #555;
+      margin-top: 8px;
+    }
+    .live-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 24px;
+      text-align: left;
+    }
+    .live-item {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      background: #161616;
+      border: 1px solid #222;
+      border-radius: 10px;
+      padding: 14px;
+      cursor: pointer;
+      text-decoration: none;
+      color: inherit;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .live-item:hover {
+      background: #1e1e1e;
+      border-color: #ff3b3b44;
+    }
+    .thumb {
+      width: 96px;
+      height: 54px;
+      object-fit: cover;
+      border-radius: 6px;
+      flex-shrink: 0;
+      background: #222;
+    }
+    .live-info { flex: 1; min-width: 0; }
+    .live-title {
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 1.4;
+      color: #e8e8e8;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .live-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .badge-live {
+      font-size: 10px;
+      font-weight: 700;
+      background: #ff3b3b;
+      color: #fff;
+      padding: 2px 6px;
+      border-radius: 3px;
+      letter-spacing: 0.05em;
+    }
+    .error-box {
+      background: #1a0f0f;
+      border: 1px solid #3d1515;
+      border-radius: 10px;
+      padding: 20px;
+      margin-top: 24px;
+    }
+    .error-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #ff6b6b;
+      margin-bottom: 8px;
+    }
+    .error-msg {
+      font-size: 12px;
+      color: #888;
+      line-height: 1.6;
+    }
+    .retry-btn {
+      display: inline-block;
+      margin-top: 16px;
+      padding: 8px 20px;
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 6px;
+      color: #ccc;
+      font-size: 12px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background 0.15s;
+    }
+    .retry-btn:hover { background: #2a2a2a; }
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 2px solid #222;
+      border-top-color: #ff3b3b;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 24px auto 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="status"><span class="live-dot"></span>LIVE</div>
+  <div id="channel-name" class="channel-name"></div>
+  <div id="main"></div>
+</div>
+
+<script>
+  // ★ 새 API 키를 여기에 붙여넣으세요
+  const API_KEY = 'AIzaSyBbGHS7EXSuj1t9V187FIr1flIfDMec3xA';
+
+  const params = new URLSearchParams(location.search);
+  const channelParam = params.get('channel') || '';
+  const keywordParam = (params.get('keyword') || '').toLowerCase();
+
+  const channelNameEl = document.getElementById('channel-name');
+  const mainEl = document.getElementById('main');
+
+  channelNameEl.textContent = channelParam + (keywordParam ? ' · ' + keywordParam : '');
+  mainEl.innerHTML = '<div class="spinner"></div><div class="loading-text" style="margin-top:16px">라이브 찾는 중...</div>';
+
+  async function getChannelId(handle) {
+    const h = handle.startsWith('@') ? handle.slice(1) : handle;
+    const r = await fetch(`https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=${h}&key=${API_KEY}`);
+    const d = await r.json();
+    if (d.items && d.items.length > 0) return d.items[0].id;
+    throw new Error('채널을 찾을 수 없습니다: ' + handle);
+  }
+
+  async function getLiveVideos(channelId) {
+    const r = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&eventType=live&type=video&maxResults=10&key=${API_KEY}`);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error.message);
+    return d.items || [];
+  }
+
+  function showList(lives, note) {
+    const items = lives.map(v => {
+      const vid = v.id.videoId;
+      const title = v.snippet.title;
+      const thumb = v.snippet.thumbnails?.medium?.url || v.snippet.thumbnails?.default?.url || '';
+      return `<a class="live-item" href="https://www.youtube.com/watch?v=${vid}" target="_blank">
+        <img class="thumb" src="${thumb}" alt="">
+        <div class="live-info">
+          <div class="live-title">${title}</div>
+          <div class="live-meta"><span class="badge-live">LIVE</span></div>
+        </div>
+      </a>`;
+    }).join('');
+    mainEl.innerHTML = `
+      <div class="loading-text" style="margin-top:0;margin-bottom:4px;color:#666">${note}</div>
+      <div class="live-list">${items}</div>`;
+  }
+
+  async function run() {
+    try {
+      if (!channelParam) throw new Error('URL에 ?channel=@채널명 을 추가해주세요');
+      if (API_KEY === 'YOUR_API_KEY_HERE') throw new Error('API 키를 설정해주세요 (index.html 상단)');
+
+      const channelId = await getChannelId(channelParam);
+      const lives = await getLiveVideos(channelId);
+
+      if (lives.length === 0) {
+        mainEl.innerHTML = `<div class="error-box">
+          <div class="error-title">현재 라이브 없음</div>
+          <div class="error-msg">${channelParam} 채널에 진행 중인 라이브가 없습니다.</div>
+          <a class="retry-btn" href="https://www.youtube.com/${channelParam}" target="_blank">채널 바로가기</a>
+        </div>`;
+        return;
+      }
+
+      // 키워드 필터링
+      if (keywordParam) {
+        const filtered = lives.filter(v =>
+          v.snippet.title.toLowerCase().includes(keywordParam)
+        );
+        // 키워드 매칭 1개 → 바로 이동
+        if (filtered.length === 1) {
+          location.href = 'https://www.youtube.com/watch?v=' + filtered[0].id.videoId;
+          return;
+        }
+        // 키워드 매칭 2개 이상 → 필터된 목록 표시
+        if (filtered.length > 1) {
+          showList(filtered, `"${keywordParam}" 관련 라이브 ${filtered.length}개`);
+          return;
+        }
+        // 키워드 매칭 없음 → 전체 목록 표시
+        showList(lives, `"${keywordParam}" 매칭 없음 — 전체 라이브 ${lives.length}개`);
+        return;
+      }
+
+      // 키워드 없고 라이브 1개 → 바로 이동
+      if (lives.length === 1) {
+        location.href = 'https://www.youtube.com/watch?v=' + lives[0].id.videoId;
+        return;
+      }
+
+      // 키워드 없고 2개 이상 → 목록 표시
+      showList(lives, `라이브 ${lives.length}개 — 선택해주세요`);
+
+    } catch (e) {
+      mainEl.innerHTML = `<div class="error-box">
+        <div class="error-title">오류 발생</div>
+        <div class="error-msg">${e.message}</div>
+        <a class="retry-btn" href="javascript:location.reload()">다시 시도</a>
+      </div>`;
+    }
+  }
+
+  run();
+</script>
+</body>
+</html>

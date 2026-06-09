@@ -3,24 +3,31 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>라이브 연결 중...</title>
+  <title>라이브</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      background: #0a0a0a;
+      background: #000;
       color: #fff;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      min-height: 100vh;
+      height: 100vh;
       display: flex;
+      flex-direction: column;
+    }
+
+    /* 로딩 화면 */
+    #loading {
+      position: fixed;
+      inset: 0;
+      background: #0a0a0a;
+      display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
+      z-index: 100;
     }
-    .container {
-      text-align: center;
-      padding: 40px 24px;
-      max-width: 480px;
-      width: 100%;
-    }
+    #loading.hidden { display: none; }
+
     .live-dot {
       display: inline-block;
       width: 10px;
@@ -37,27 +44,66 @@
     .status {
       font-size: 13px;
       color: #888;
-      margin-bottom: 32px;
+      margin-bottom: 20px;
       letter-spacing: 0.05em;
       text-transform: uppercase;
     }
-    .channel-name {
-      font-size: 20px;
-      font-weight: 600;
-      color: #fff;
-      margin-bottom: 8px;
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 2px solid #222;
+      border-top-color: #ff3b3b;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 16px;
     }
-    .loading-text {
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-text { font-size: 13px; color: #555; }
+
+    /* 플레이어 화면 */
+    #player-view {
+      display: none;
+      flex-direction: column;
+      height: 100vh;
+    }
+    #player-view.show { display: flex; }
+
+    #player-wrap {
+      flex: 1;
+      position: relative;
+      background: #000;
+    }
+    #player-wrap iframe {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+
+    /* 선택 목록 화면 */
+    #list-view {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 40px 24px;
+      background: #0a0a0a;
+    }
+    #list-view.show { display: flex; }
+
+    .list-title {
       font-size: 13px;
-      color: #555;
-      margin-top: 8px;
+      color: #666;
+      margin-bottom: 20px;
     }
     .live-list {
       display: flex;
       flex-direction: column;
       gap: 12px;
-      margin-top: 24px;
-      text-align: left;
+      width: 100%;
+      max-width: 480px;
     }
     .live-item {
       display: flex;
@@ -68,14 +114,9 @@
       border-radius: 10px;
       padding: 14px;
       cursor: pointer;
-      text-decoration: none;
-      color: inherit;
       transition: background 0.15s, border-color 0.15s;
     }
-    .live-item:hover {
-      background: #1e1e1e;
-      border-color: #ff3b3b44;
-    }
+    .live-item:hover { background: #1e1e1e; border-color: #ff3b3b44; }
     .thumb {
       width: 96px;
       height: 54px;
@@ -95,39 +136,39 @@
       -webkit-box-orient: vertical;
       overflow: hidden;
     }
-    .live-meta {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-top: 6px;
-    }
     .badge-live {
+      display: inline-block;
+      margin-top: 6px;
       font-size: 10px;
       font-weight: 700;
       background: #ff3b3b;
       color: #fff;
       padding: 2px 6px;
       border-radius: 3px;
-      letter-spacing: 0.05em;
     }
+
+    /* 에러 */
+    #error-view {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 40px 24px;
+      background: #0a0a0a;
+      text-align: center;
+    }
+    #error-view.show { display: flex; }
     .error-box {
       background: #1a0f0f;
       border: 1px solid #3d1515;
       border-radius: 10px;
-      padding: 20px;
-      margin-top: 24px;
+      padding: 24px;
+      max-width: 400px;
+      width: 100%;
     }
-    .error-title {
-      font-size: 14px;
-      font-weight: 600;
-      color: #ff6b6b;
-      margin-bottom: 8px;
-    }
-    .error-msg {
-      font-size: 12px;
-      color: #888;
-      line-height: 1.6;
-    }
+    .error-title { font-size: 14px; font-weight: 600; color: #ff6b6b; margin-bottom: 8px; }
+    .error-msg { font-size: 12px; color: #888; line-height: 1.6; }
     .retry-btn {
       display: inline-block;
       margin-top: 16px;
@@ -139,41 +180,81 @@
       font-size: 12px;
       cursor: pointer;
       text-decoration: none;
-      transition: background 0.15s;
     }
     .retry-btn:hover { background: #2a2a2a; }
-    .spinner {
-      width: 32px;
-      height: 32px;
-      border: 2px solid #222;
-      border-top-color: #ff3b3b;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-      margin: 24px auto 0;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
-<div class="container">
+
+<!-- 로딩 -->
+<div id="loading">
   <div class="status"><span class="live-dot"></span>LIVE</div>
-  <div id="channel-name" class="channel-name"></div>
-  <div id="main"></div>
+  <div class="spinner"></div>
+  <div class="loading-text">라이브 찾는 중...</div>
+</div>
+
+<!-- 플레이어 -->
+<div id="player-view">
+  <div id="player-wrap"></div>
+</div>
+
+<!-- 선택 목록 -->
+<div id="list-view">
+  <div class="status"><span class="live-dot"></span>LIVE</div>
+  <div class="list-title" id="list-title"></div>
+  <div class="live-list" id="live-list"></div>
+</div>
+
+<!-- 에러 -->
+<div id="error-view">
+  <div class="error-box">
+    <div class="error-title" id="error-title"></div>
+    <div class="error-msg" id="error-msg"></div>
+    <a class="retry-btn" href="javascript:location.reload()">다시 시도</a>
+  </div>
 </div>
 
 <script>
-  // ★ 새 API 키를 여기에 붙여넣으세요
+  // ★ API 키를 여기에 붙여넣으세요
   const API_KEY = 'AIzaSyBbGHS7EXSuj1t9V187FIr1flIfDMec3xA';
 
   const params = new URLSearchParams(location.search);
   const channelParam = params.get('channel') || '';
   const keywordParam = (params.get('keyword') || '').toLowerCase();
 
-  const channelNameEl = document.getElementById('channel-name');
-  const mainEl = document.getElementById('main');
+  function showPlayer(videoId) {
+    document.getElementById('loading').classList.add('hidden');
+    const view = document.getElementById('player-view');
+    view.classList.add('show');
+    document.getElementById('player-wrap').innerHTML =
+      `<iframe src="https://www.youtube.com/embed/${videoId}?autoplay=1&mute=0" allowfullscreen allow="autoplay"></iframe>`;
+  }
 
-  channelNameEl.textContent = channelParam + (keywordParam ? ' · ' + keywordParam : '');
-  mainEl.innerHTML = '<div class="spinner"></div><div class="loading-text" style="margin-top:16px">라이브 찾는 중...</div>';
+  function showList(lives, note) {
+    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('list-title').textContent = note;
+    const listEl = document.getElementById('live-list');
+    listEl.innerHTML = lives.map(v => {
+      const vid = v.id.videoId;
+      const title = v.snippet.title;
+      const thumb = v.snippet.thumbnails?.medium?.url || '';
+      return `<div class="live-item" onclick="showPlayer('${vid}')">
+        <img class="thumb" src="${thumb}" alt="">
+        <div class="live-info">
+          <div class="live-title">${title}</div>
+          <span class="badge-live">LIVE</span>
+        </div>
+      </div>`;
+    }).join('');
+    document.getElementById('list-view').classList.add('show');
+  }
+
+  function showError(title, msg) {
+    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('error-title').textContent = title;
+    document.getElementById('error-msg').textContent = msg;
+    document.getElementById('error-view').classList.add('show');
+  }
 
   async function getChannelId(handle) {
     const h = handle.startsWith('@') ? handle.slice(1) : handle;
@@ -190,76 +271,34 @@
     return d.items || [];
   }
 
-  function showList(lives, note) {
-    const items = lives.map(v => {
-      const vid = v.id.videoId;
-      const title = v.snippet.title;
-      const thumb = v.snippet.thumbnails?.medium?.url || v.snippet.thumbnails?.default?.url || '';
-      return `<a class="live-item" href="https://www.youtube.com/watch?v=${vid}" target="_blank">
-        <img class="thumb" src="${thumb}" alt="">
-        <div class="live-info">
-          <div class="live-title">${title}</div>
-          <div class="live-meta"><span class="badge-live">LIVE</span></div>
-        </div>
-      </a>`;
-    }).join('');
-    mainEl.innerHTML = `
-      <div class="loading-text" style="margin-top:0;margin-bottom:4px;color:#666">${note}</div>
-      <div class="live-list">${items}</div>`;
-  }
-
   async function run() {
     try {
       if (!channelParam) throw new Error('URL에 ?channel=@채널명 을 추가해주세요');
-      if (API_KEY === 'YOUR_API_KEY_HERE') throw new Error('API 키를 설정해주세요 (index.html 상단)');
+      if (API_KEY === 'YOUR_API_KEY_HERE') throw new Error('API 키를 설정해주세요');
 
       const channelId = await getChannelId(channelParam);
       const lives = await getLiveVideos(channelId);
 
       if (lives.length === 0) {
-        mainEl.innerHTML = `<div class="error-box">
-          <div class="error-title">현재 라이브 없음</div>
-          <div class="error-msg">${channelParam} 채널에 진행 중인 라이브가 없습니다.</div>
-          <a class="retry-btn" href="https://www.youtube.com/${channelParam}" target="_blank">채널 바로가기</a>
-        </div>`;
+        showError('현재 라이브 없음', channelParam + ' 채널에 진행 중인 라이브가 없습니다.');
         return;
       }
 
-      // 키워드 필터링
       if (keywordParam) {
         const filtered = lives.filter(v =>
           v.snippet.title.toLowerCase().includes(keywordParam)
         );
-        // 키워드 매칭 1개 → 바로 이동
-        if (filtered.length === 1) {
-          location.href = 'https://www.youtube.com/watch?v=' + filtered[0].id.videoId;
-          return;
-        }
-        // 키워드 매칭 2개 이상 → 필터된 목록 표시
-        if (filtered.length > 1) {
-          showList(filtered, `"${keywordParam}" 관련 라이브 ${filtered.length}개`);
-          return;
-        }
-        // 키워드 매칭 없음 → 전체 목록 표시
+        if (filtered.length === 1) { showPlayer(filtered[0].id.videoId); return; }
+        if (filtered.length > 1) { showList(filtered, `"${keywordParam}" 관련 라이브 ${filtered.length}개`); return; }
         showList(lives, `"${keywordParam}" 매칭 없음 — 전체 라이브 ${lives.length}개`);
         return;
       }
 
-      // 키워드 없고 라이브 1개 → 바로 이동
-      if (lives.length === 1) {
-        location.href = 'https://www.youtube.com/watch?v=' + lives[0].id.videoId;
-        return;
-      }
-
-      // 키워드 없고 2개 이상 → 목록 표시
+      if (lives.length === 1) { showPlayer(lives[0].id.videoId); return; }
       showList(lives, `라이브 ${lives.length}개 — 선택해주세요`);
 
     } catch (e) {
-      mainEl.innerHTML = `<div class="error-box">
-        <div class="error-title">오류 발생</div>
-        <div class="error-msg">${e.message}</div>
-        <a class="retry-btn" href="javascript:location.reload()">다시 시도</a>
-      </div>`;
+      showError('오류 발생', e.message);
     }
   }
 

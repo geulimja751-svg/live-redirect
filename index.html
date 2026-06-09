@@ -6,16 +6,16 @@
   <title>라이브</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
+
     body {
       background: #000;
       color: #fff;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       height: 100vh;
-      display: flex;
-      flex-direction: column;
+      overflow: hidden;
     }
 
-    /* 로딩 화면 */
+    /* ── 로딩 ── */
     #loading {
       position: fixed;
       inset: 0;
@@ -24,56 +24,49 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      z-index: 100;
+      z-index: 200;
     }
     #loading.hidden { display: none; }
-
     .live-dot {
       display: inline-block;
-      width: 10px;
-      height: 10px;
+      width: 9px; height: 9px;
       background: #ff3b3b;
       border-radius: 50%;
-      margin-right: 8px;
+      margin-right: 7px;
       animation: pulse 1.4s ease-in-out infinite;
     }
     @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(0.85); }
+      0%,100% { opacity:1; transform:scale(1); }
+      50% { opacity:.4; transform:scale(.85); }
     }
-    .status {
-      font-size: 13px;
-      color: #888;
-      margin-bottom: 20px;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-    }
+    .ld-status { font-size:12px; color:#888; letter-spacing:.08em; text-transform:uppercase; margin-bottom:24px; }
     .spinner {
-      width: 32px;
-      height: 32px;
-      border: 2px solid #222;
-      border-top-color: #ff3b3b;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-      margin-bottom: 16px;
+      width:30px; height:30px;
+      border:2px solid #222;
+      border-top-color:#ff3b3b;
+      border-radius:50%;
+      animation:spin .8s linear infinite;
+      margin-bottom:14px;
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .loading-text { font-size: 13px; color: #555; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .ld-text { font-size:13px; color:#555; }
 
-    /* 플레이어 화면 */
-    #player-view {
+    /* ── 메인 레이아웃 ── */
+    #app {
       display: none;
-      flex-direction: column;
       height: 100vh;
+      flex-direction: row;
     }
-    #player-view.show { display: flex; }
+    #app.show { display: flex; }
 
-    #player-wrap {
+    /* 플레이어 영역 */
+    #player-col {
       flex: 1;
       position: relative;
       background: #000;
+      min-width: 0;
     }
-    #player-wrap iframe {
+    #player-col iframe {
       position: absolute;
       inset: 0;
       width: 100%;
@@ -81,7 +74,92 @@
       border: none;
     }
 
-    /* 선택 목록 화면 */
+    /* 채팅 사이드 패널 */
+    #chat-panel {
+      width: 0;
+      overflow: hidden;
+      transition: width 0.25s ease;
+      background: #0f0f0f;
+      border-left: 1px solid #1a1a1a;
+      flex-shrink: 0;
+    }
+    #chat-panel.open {
+      width: 340px;
+    }
+    #chat-panel iframe {
+      width: 340px;
+      height: 100%;
+      border: none;
+    }
+
+    /* 오버레이 채팅 */
+    #overlay-chat {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+      overflow: hidden;
+      z-index: 10;
+      display: none;
+    }
+    #overlay-chat.show { display: block; }
+
+    .overlay-msg {
+      position: absolute;
+      left: 16px;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(4px);
+      border-radius: 20px;
+      padding: 6px 14px;
+      font-size: 13px;
+      line-height: 1.4;
+      max-width: 55%;
+      word-break: break-word;
+      white-space: pre-wrap;
+      animation: floatUp 8s linear forwards;
+      pointer-events: none;
+    }
+    .overlay-msg .author {
+      font-weight: 600;
+      font-size: 11px;
+      margin-right: 6px;
+      opacity: .85;
+    }
+    @keyframes floatUp {
+      0%   { opacity: 0; transform: translateY(0px); }
+      8%   { opacity: 1; }
+      80%  { opacity: 1; }
+      100% { opacity: 0; transform: translateY(-40px); }
+    }
+
+    /* 컨트롤 버튼 */
+    #controls {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      display: flex;
+      gap: 10px;
+      z-index: 20;
+    }
+    .ctrl-btn {
+      width: 44px; height: 44px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(8px);
+      color: #fff;
+      font-size: 18px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s, transform 0.1s;
+      outline: none;
+    }
+    .ctrl-btn:hover { background: rgba(40,40,40,0.85); transform: scale(1.08); }
+    .ctrl-btn.active { background: rgba(255,59,59,0.7); }
+
+    /* 선택 목록 */
     #list-view {
       display: none;
       flex-direction: column;
@@ -92,116 +170,85 @@
       background: #0a0a0a;
     }
     #list-view.show { display: flex; }
-
-    .list-title {
-      font-size: 13px;
-      color: #666;
-      margin-bottom: 20px;
-    }
-    .live-list {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      width: 100%;
-      max-width: 480px;
-    }
+    .list-status { font-size:12px; color:#888; letter-spacing:.08em; text-transform:uppercase; margin-bottom:24px; }
+    .list-note { font-size:13px; color:#555; margin-bottom:20px; }
+    .live-list { display:flex; flex-direction:column; gap:12px; width:100%; max-width:480px; }
     .live-item {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      background: #161616;
-      border: 1px solid #222;
-      border-radius: 10px;
-      padding: 14px;
-      cursor: pointer;
-      transition: background 0.15s, border-color 0.15s;
+      display:flex; align-items:center; gap:14px;
+      background:#161616; border:1px solid #222; border-radius:10px;
+      padding:14px; cursor:pointer;
+      transition:background .15s, border-color .15s;
     }
-    .live-item:hover { background: #1e1e1e; border-color: #ff3b3b44; }
-    .thumb {
-      width: 96px;
-      height: 54px;
-      object-fit: cover;
-      border-radius: 6px;
-      flex-shrink: 0;
-      background: #222;
-    }
-    .live-info { flex: 1; min-width: 0; }
+    .live-item:hover { background:#1e1e1e; border-color:#ff3b3b44; }
+    .thumb { width:96px; height:54px; object-fit:cover; border-radius:6px; flex-shrink:0; background:#222; }
+    .live-info { flex:1; min-width:0; }
     .live-title {
-      font-size: 13px;
-      font-weight: 500;
-      line-height: 1.4;
-      color: #e8e8e8;
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
+      font-size:13px; font-weight:500; line-height:1.4; color:#e8e8e8;
+      display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
     }
     .badge-live {
-      display: inline-block;
-      margin-top: 6px;
-      font-size: 10px;
-      font-weight: 700;
-      background: #ff3b3b;
-      color: #fff;
-      padding: 2px 6px;
-      border-radius: 3px;
+      display:inline-block; margin-top:6px;
+      font-size:10px; font-weight:700;
+      background:#ff3b3b; color:#fff;
+      padding:2px 6px; border-radius:3px; letter-spacing:.05em;
     }
 
     /* 에러 */
     #error-view {
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      padding: 40px 24px;
-      background: #0a0a0a;
-      text-align: center;
+      display:none; flex-direction:column;
+      align-items:center; justify-content:center;
+      min-height:100vh; padding:40px 24px;
+      background:#0a0a0a; text-align:center;
     }
-    #error-view.show { display: flex; }
-    .error-box {
-      background: #1a0f0f;
-      border: 1px solid #3d1515;
-      border-radius: 10px;
-      padding: 24px;
-      max-width: 400px;
-      width: 100%;
-    }
-    .error-title { font-size: 14px; font-weight: 600; color: #ff6b6b; margin-bottom: 8px; }
-    .error-msg { font-size: 12px; color: #888; line-height: 1.6; }
+    #error-view.show { display:flex; }
+    .error-box { background:#1a0f0f; border:1px solid #3d1515; border-radius:10px; padding:24px; max-width:400px; width:100%; }
+    .error-title { font-size:14px; font-weight:600; color:#ff6b6b; margin-bottom:8px; }
+    .error-msg { font-size:12px; color:#888; line-height:1.6; }
     .retry-btn {
-      display: inline-block;
-      margin-top: 16px;
-      padding: 8px 20px;
-      background: #1e1e1e;
-      border: 1px solid #333;
-      border-radius: 6px;
-      color: #ccc;
-      font-size: 12px;
-      cursor: pointer;
-      text-decoration: none;
+      display:inline-block; margin-top:16px; padding:8px 20px;
+      background:#1e1e1e; border:1px solid #333; border-radius:6px;
+      color:#ccc; font-size:12px; cursor:pointer; text-decoration:none;
     }
-    .retry-btn:hover { background: #2a2a2a; }
+    .retry-btn:hover { background:#2a2a2a; }
+
+    /* 모바일 */
+    @media (max-width: 640px) {
+      #app { flex-direction: column; }
+      #chat-panel.open { width: 100%; height: 40vh; }
+      #chat-panel iframe { width: 100%; }
+      #player-col { flex: 1; }
+    }
   </style>
 </head>
 <body>
 
 <!-- 로딩 -->
 <div id="loading">
-  <div class="status"><span class="live-dot"></span>LIVE</div>
+  <div class="ld-status"><span class="live-dot"></span>LIVE</div>
   <div class="spinner"></div>
-  <div class="loading-text">라이브 찾는 중...</div>
+  <div class="ld-text">라이브 찾는 중...</div>
 </div>
 
-<!-- 플레이어 -->
-<div id="player-view">
-  <div id="player-wrap"></div>
+<!-- 메인 앱 -->
+<div id="app">
+  <!-- 플레이어 -->
+  <div id="player-col">
+    <div id="overlay-chat"></div>
+    <div id="controls">
+      <button class="ctrl-btn" id="btn-overlay" title="오버레이 채팅">💬</button>
+      <button class="ctrl-btn" id="btn-panel" title="채팅창">📋</button>
+    </div>
+  </div>
+  <!-- 채팅 사이드 -->
+  <div id="chat-panel">
+    <iframe id="chat-iframe" src="" allowfullscreen></iframe>
+  </div>
 </div>
 
-<!-- 선택 목록 -->
+<!-- 목록 선택 -->
 <div id="list-view">
-  <div class="status"><span class="live-dot"></span>LIVE</div>
-  <div class="list-title" id="list-title"></div>
+  <div class="list-status"><span class="live-dot"></span>LIVE</div>
+  <div class="list-note" id="list-note"></div>
   <div class="live-list" id="live-list"></div>
 </div>
 
@@ -222,23 +269,61 @@
   const channelParam = params.get('channel') || '';
   const keywordParam = (params.get('keyword') || '').toLowerCase();
 
+  let currentVideoId = null;
+  let overlayOn = false;
+  let panelOn = false;
+  let overlayTimer = null;
+
+  // ── 오버레이 채팅 메시지 시뮬레이션 (YouTube chat API는 브라우저에서 직접 접근 불가, iframe에서 가져오는 방식 사용) ──
+  // 실제 채팅은 사이드 패널 iframe으로 보여주고,
+  // 오버레이는 채팅 iframe 메시지를 파싱해서 띄우는 방식
+  const overlayEl = document.getElementById('overlay-chat');
+
+  function spawnOverlayMsg(author, text, color) {
+    const el = document.createElement('div');
+    el.className = 'overlay-msg';
+    el.innerHTML = `<span class="author" style="color:${color}">${author}</span>${text}`;
+    // 랜덤 세로 위치 (하단 10%~80% 사이)
+    el.style.bottom = (10 + Math.random() * 60) + '%';
+    overlayEl.appendChild(el);
+    setTimeout(() => el.remove(), 8200);
+  }
+
+  // 채팅 iframe postMessage 수신 (같은 도메인 아니라 직접 파싱 불가)
+  // 대신 오버레이 모드일 때 채팅 iframe을 숨겨두고 MutationObserver 불가하므로
+  // 오버레이는 별도 숨겨진 채팅 iframe에서 메시지를 polling하는 방식으로 처리
+  // YouTube live_chat iframe은 cross-origin이라 JS 접근 불가 → 오버레이는 패널 채팅과 연동 안 됨
+  // 현실적 구현: 오버레이 모드 ON 시 패널도 함께 열어두고 사용자가 보는 방식 안내
+
   function showPlayer(videoId) {
+    currentVideoId = videoId;
     document.getElementById('loading').classList.add('hidden');
-    const view = document.getElementById('player-view');
-    view.classList.add('show');
-    document.getElementById('player-wrap').innerHTML =
-      `<iframe src="https://www.youtube.com/embed/${videoId}?autoplay=1&mute=0" allowfullscreen allow="autoplay"></iframe>`;
+
+    const playerCol = document.getElementById('player-col');
+    // 플레이어 iframe 삽입 (controls 앞에)
+    const iframe = document.createElement('iframe');
+    iframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&mute=0`;
+    iframe.allow = 'autoplay; fullscreen';
+    iframe.allowFullscreen = true;
+    playerCol.insertBefore(iframe, playerCol.firstChild);
+
+    document.getElementById('app').classList.add('show');
+
+    // 채팅 iframe src 설정
+    const domain = location.hostname;
+    document.getElementById('chat-iframe').src =
+      `https://www.youtube.com/live_chat?v=${videoId}&embed_domain=${domain}`;
   }
 
   function showList(lives, note) {
     document.getElementById('loading').classList.add('hidden');
-    document.getElementById('list-title').textContent = note;
+    document.getElementById('list-note').textContent = note;
     const listEl = document.getElementById('live-list');
     listEl.innerHTML = lives.map(v => {
       const vid = v.id.videoId;
       const title = v.snippet.title;
       const thumb = v.snippet.thumbnails?.medium?.url || '';
-      return `<div class="live-item" onclick="showPlayer('${vid}')">
+      return `<div class="live-item" onclick="showPlayer('${vid}');document.getElementById('list-view').classList.remove('show')">
         <img class="thumb" src="${thumb}" alt="">
         <div class="live-info">
           <div class="live-title">${title}</div>
@@ -255,6 +340,32 @@
     document.getElementById('error-msg').textContent = msg;
     document.getElementById('error-view').classList.add('show');
   }
+
+  // 오버레이 버튼
+  document.getElementById('btn-overlay').addEventListener('click', () => {
+    overlayOn = !overlayOn;
+    document.getElementById('btn-overlay').classList.toggle('active', overlayOn);
+    overlayEl.classList.toggle('show', overlayOn);
+
+    if (overlayOn && !panelOn) {
+      // 오버레이 켤 때 채팅 패널도 함께 열기 (cross-origin 제약으로 오버레이 단독 동작 불가)
+      panelOn = true;
+      document.getElementById('chat-panel').classList.add('open');
+      document.getElementById('btn-panel').classList.add('active');
+    }
+  });
+
+  // 채팅 패널 버튼
+  document.getElementById('btn-panel').addEventListener('click', () => {
+    panelOn = !panelOn;
+    document.getElementById('chat-panel').classList.toggle('open', panelOn);
+    document.getElementById('btn-panel').classList.toggle('active', panelOn);
+    if (!panelOn && overlayOn) {
+      overlayOn = false;
+      overlayEl.classList.remove('show');
+      document.getElementById('btn-overlay').classList.remove('active');
+    }
+  });
 
   async function getChannelId(handle) {
     const h = handle.startsWith('@') ? handle.slice(1) : handle;

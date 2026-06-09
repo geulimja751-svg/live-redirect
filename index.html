@@ -94,6 +94,25 @@
   const mainEl = document.getElementById('main');
   mainEl.innerHTML = '<div class="spinner"></div><div class="loading-text" style="margin-top:16px">라이브 찾는 중...</div>';
 
+  function openYoutube(videoId) {
+    const webUrl = 'https://www.youtube.com/watch?v=' + videoId + '&autoplay=1';
+    const appUrl = 'vnd.youtube://' + videoId;
+
+    // 모바일인 경우 앱 스킴 시도
+    if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+      const start = Date.now();
+      setTimeout(() => {
+        // 앱으로 전환됐으면 시간이 지연됨 → 안 됐으면 웹으로
+        if (Date.now() - start < 2000) {
+          location.href = webUrl;
+        }
+      }, 1500);
+      location.href = appUrl;
+    } else {
+      location.href = webUrl;
+    }
+  }
+
   async function getChannelId(handle) {
     const h = handle.startsWith('@') ? handle.slice(1) : handle;
     const r = await fetch(`https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=${h}&key=${API_KEY}`);
@@ -103,7 +122,7 @@
   }
 
   async function getLiveVideos(channelId) {
-    const r = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&eventType=live&type=video&maxResults=20&key=${API_KEY}`);
+    const r = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&eventType=live&type=video&maxResults=50&key=${API_KEY}`);
     const d = await r.json();
     if (d.error) throw new Error(d.error.message);
     return d.items || [];
@@ -114,7 +133,7 @@
       const vid = v.id.videoId;
       const title = v.snippet.title;
       const thumb = v.snippet.thumbnails?.medium?.url || '';
-      return `<a class="live-item" href="https://www.youtube.com/watch?v=${vid}&autoplay=1">
+      return `<a class="live-item" href="javascript:void(0)" onclick="openYoutube('${vid}')">
         <img class="thumb" src="${thumb}" alt="">
         <div class="live-info">
           <div class="live-title">${title}</div>
@@ -146,13 +165,13 @@
 
       if (keywordParam) {
         const filtered = lives.filter(v => v.snippet.title.toLowerCase().includes(keywordParam));
-        if (filtered.length === 1) { location.href = 'https://www.youtube.com/watch?v=' + filtered[0].id.videoId + '&autoplay=1'; return; }
+        if (filtered.length === 1) { openYoutube(filtered[0].id.videoId); return; }
         if (filtered.length > 1) { showList(filtered, `"${keywordParam}" 관련 라이브 ${filtered.length}개`); return; }
         showList(lives, `"${keywordParam}" 매칭 없음 — 전체 라이브 ${lives.length}개`);
         return;
       }
 
-      if (lives.length === 1) { location.href = 'https://www.youtube.com/watch?v=' + lives[0].id.videoId + '&autoplay=1'; return; }
+      if (lives.length === 1) { openYoutube(lives[0].id.videoId); return; }
       showList(lives, `라이브 ${lives.length}개 — 선택해주세요`);
 
     } catch (e) {

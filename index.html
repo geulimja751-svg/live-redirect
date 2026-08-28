@@ -81,31 +81,38 @@
   <div id="channel-name" class="channel-name"></div>
   <div id="main"></div>
 </div>
-
 <script>
-  // ★ API 키를 여기에 붙여넣으세요
+  // ★ API 키
   const API_KEY = 'AIzaSyBbGHS7EXSuj1t9V187FIr1flIfDMec3xA';
 
   const params = new URLSearchParams(location.search);
   const channelParam = params.get('channel') || '';
   const keywordParam = (params.get('keyword') || '').toLowerCase();
+  const embedMode = params.get('embed') === '1' || params.get('embed') === 'true';
 
-  document.getElementById('channel-name').textContent = channelParam + (keywordParam ? ' · ' + keywordParam : '');
+  document.getElementById('channel-name').textContent =
+    channelParam + (keywordParam ? ' · ' + keywordParam : '') + (embedMode ? ' · embed' : '');
+
   const mainEl = document.getElementById('main');
   mainEl.innerHTML = '<div class="spinner"></div><div class="loading-text" style="margin-top:16px">라이브 찾는 중...</div>';
 
-  function openYoutube(videoId) {
+  function goToVideo(videoId) {
+    if (embedMode) {
+      // 패널 iframe용: 바로 embed 주소로 이동
+      location.replace(
+        'https://www.youtube.com/embed/' + videoId +
+        '?autoplay=1&mute=1&playsinline=1&rel=0'
+      );
+      return;
+    }
+
+    // 기존 동작 (노션·북마크·모바일 앱)
     const webUrl = 'https://www.youtube.com/watch?v=' + videoId + '&autoplay=1';
     const appUrl = 'vnd.youtube://' + videoId;
-
-    // 모바일인 경우 앱 스킴 시도
     if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
       const start = Date.now();
       setTimeout(() => {
-        // 앱으로 전환됐으면 시간이 지연됨 → 안 됐으면 웹으로
-        if (Date.now() - start < 2000) {
-          location.href = webUrl;
-        }
+        if (Date.now() - start < 2000) location.href = webUrl;
       }, 1500);
       location.href = appUrl;
     } else {
@@ -115,14 +122,18 @@
 
   async function getChannelId(handle) {
     const h = handle.startsWith('@') ? handle.slice(1) : handle;
-    const r = await fetch(`https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=${h}&key=${API_KEY}`);
+    const r = await fetch(
+      `https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=${encodeURIComponent(h)}&key=${API_KEY}`
+    );
     const d = await r.json();
     if (d.items && d.items.length > 0) return d.items[0].id;
     throw new Error('채널을 찾을 수 없습니다: ' + handle);
   }
 
   async function getLiveVideos(channelId) {
-    const r = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&eventType=live&type=video&maxResults=50&key=${API_KEY}`);
+    const r = await fetch(
+      `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&eventType=live&type=video&maxResults=50&key=${API_KEY}`
+    );
     const d = await r.json();
     if (d.error) throw new Error(d.error.message);
     return d.items || [];
@@ -133,7 +144,7 @@
       const vid = v.id.videoId;
       const title = v.snippet.title;
       const thumb = v.snippet.thumbnails?.medium?.url || '';
-      return `<a class="live-item" href="javascript:void(0)" onclick="openYoutube('${vid}')">
+      return `<a class="live-item" href="javascript:void(0)" onclick="goToVideo('${vid}')">
         <img class="thumb" src="${thumb}" alt="">
         <div class="live-info">
           <div class="live-title">${title}</div>
@@ -149,7 +160,7 @@
   async function run() {
     try {
       if (!channelParam) throw new Error('URL에 ?channel=@채널명 을 추가해주세요');
-      if (API_KEY === 'YOUR_API_KEY_HERE') throw new Error('API 키를 설정해주세요');
+      if (!API_KEY || API_KEY === 'YOUR_API_KEY_HERE') throw new Error('API 키를 설정해주세요');
 
       const channelId = await getChannelId(channelParam);
       const lives = await getLiveVideos(channelId);
@@ -164,16 +175,37 @@
       }
 
       if (keywordParam) {
-        const filtered = lives.filter(v => v.snippet.title.toLowerCase().includes(keywordParam));
-        if (filtered.length === 1) { openYoutube(filtered[0].id.videoId); return; }
-        if (filtered.length > 1) { showList(filtered, `"${keywordParam}" 관련 라이브 ${filtered.length}개`); return; }
+        const filtered = lives.filter(v =>
+          v.snippet.title.toLowerCase().includes(keywordParam)
+        );
+        if (filtered.length === 1) {
+          goToVideo(filtered[0].id.videoId);
+          return;
+        }
+        if (filtered.length > 1) {
+          // embed 모드에서는 첫 번째를 자동 선택 (패널에서 클릭 불가할 때 대비)
+          if (embedMode) {
+            goToVideo(filtered[0].id.videoId);
+            return;
+          }
+          showList(filtered, `"${keywordParam}" 관련 라이브 ${filtered.length}개`);
+          return;
+        }
+        // 매칭 없음
+        if (embedMode && lives.length >= 1) {
+          goToVideo(lives[0].id.videoId); // 폴백: 아무거나 하나
+          return;
+        }
         showList(lives, `"${keywordParam}" 매칭 없음 — 전체 라이브 ${lives.length}개`);
         return;
       }
 
-      if (lives.length === 1) { openYoutube(lives[0].id.videoId); return; }
+      // 키워드 없음
+      if (lives.length === 1 || embedMode) {
+        goToVideo(lives[0].id.videoId);
+        return;
+      }
       showList(lives, `라이브 ${lives.length}개 — 선택해주세요`);
-
     } catch (e) {
       mainEl.innerHTML = `<div class="error-box">
         <div class="error-title">오류 발생</div>

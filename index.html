@@ -96,17 +96,41 @@
   const mainEl = document.getElementById('main');
   mainEl.innerHTML = '<div class="spinner"></div><div class="loading-text" style="margin-top:16px">라이브 찾는 중...</div>';
 
+  // ===== 캐시 설정 =====
+  const CACHE_TTL = 12 * 60 * 60 * 1000; // 12시간
+
+  function getCache(key) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return null;
+      const { data, expire } = JSON.parse(raw);
+      if (Date.now() > expire) {
+        localStorage.removeItem(key);
+        return null;
+      }
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  function setCache(key, data) {
+    try {
+      localStorage.setItem(key, JSON.stringify({
+        data,
+        expire: Date.now() + CACHE_TTL
+      }));
+    } catch {}
+  }
+
   function goToVideo(videoId) {
     if (embedMode) {
-      // 패널 iframe용: 바로 embed 주소로 이동
       location.replace(
         'https://www.youtube.com/embed/' + videoId +
-        '?autoplay=1&mute=1&playsinline=1&rel=0'
+        '?autoplay=1&mute=0&playsinline=1&rel=0'
       );
       return;
     }
-
-    // 기존 동작 (노션·북마크·모바일 앱)
     const webUrl = 'https://www.youtube.com/watch?v=' + videoId + '&autoplay=1';
     const appUrl = 'vnd.youtube://' + videoId;
     if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
@@ -120,16 +144,40 @@
     }
   }
 
+  // 채널 ID 가져오기 (캐시 적용)
   async function getChannelId(handle) {
+    const cacheKey = 'yt_ch_' + handle;
+    const cached = getCache(cacheKey);
+    if (cached) return cached;
+
     const h = handle.startsWith('@') ? handle.slice(1) : handle;
     const r = await fetch(
       `https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=${encodeURIComponent(h)}&key=${API_KEY}`
     );
     const d = await r.json();
-    if (d.items && d.items.length > 0) return d.items[0].id;
+    if (d.items && d.items.length > 0) {
+      const id = d.items[0].id;
+      setCache(cacheKey, id);
+      return id;
+    }
     throw new Error('채널을 찾을 수 없습니다: ' + handle);
   }
 
+  // 영상이 아직 라이브인지 확인 (비용 1)
+  async function isStillLive(videoId) {
+    try {
+      const r = await fetch(
+        `https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${videoId}&key=${API_KEY}`
+      );
+      const d = await r.json();
+      if (!d.items || d.items.length === 0) return false;
+      return d.items[0].snippet.liveBroadcastContent === 'live';
+    } catch {
+      return false;
+    }
+  }
+
+  // 라이브 영상 검색 (Search Queries 소모)
   async function getLiveVideos(channelId) {
     const r = await fetch(
       `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&eventType=live&type=video&maxResults=50&key=${API_KEY}`
@@ -163,6 +211,23 @@
       if (!API_KEY || API_KEY === 'YOUR_API_KEY_HERE') throw new Error('API 키를 설정해주세요');
 
       const channelId = await getChannelId(channelParam);
+
+      // 캐시 키 (채널 + 키워드 조합)
+      const cacheKey = 'yt_live_' + channelId + (keywordParam ? '_' + keywordParam : '');
+      const cached = getCache(cacheKey);
+
+      // 1. 캐시에 영상 ID가 있으면 → 아직 라이브인지 확인
+      if (cached && cached.videoId) {
+        const stillLive = await isStillLive(cached.videoId);
+        if (stillLive) {
+          goToVideo(cached.videoId);
+          return;
+        }
+        // 라이브 끝났으면 캐시 삭제하고 아래로 진행
+        localStorage.removeItem(cacheKey);
+      }
+
+      // 2. 새로 검색
       const lives = await getLiveVideos(channelId);
 
       if (lives.length === 0) {
@@ -174,26 +239,33 @@
         return;
       }
 
+      let targetLives = lives;
+
       if (keywordParam) {
         const filtered = lives.filter(v =>
           v.snippet.title.toLowerCase().includes(keywordParam)
         );
+
         if (filtered.length === 1) {
+          setCache(cacheKey, { videoId: filtered[0].id.videoId });
           goToVideo(filtered[0].id.videoId);
           return;
         }
+
         if (filtered.length > 1) {
-          // embed 모드에서는 첫 번째를 자동 선택 (패널에서 클릭 불가할 때 대비)
           if (embedMode) {
+            setCache(cacheKey, { videoId: filtered[0].id.videoId });
             goToVideo(filtered[0].id.videoId);
             return;
           }
           showList(filtered, `"${keywordParam}" 관련 라이브 ${filtered.length}개`);
           return;
         }
-        // 매칭 없음
+
+        // 키워드 매칭 없음
         if (embedMode && lives.length >= 1) {
-          goToVideo(lives[0].id.videoId); // 폴백: 아무거나 하나
+          setCache(cacheKey, { videoId: lives[0].id.videoId });
+          goToVideo(lives[0].id.videoId);
           return;
         }
         showList(lives, `"${keywordParam}" 매칭 없음 — 전체 라이브 ${lives.length}개`);
@@ -202,10 +274,13 @@
 
       // 키워드 없음
       if (lives.length === 1 || embedMode) {
+        setCache(cacheKey, { videoId: lives[0].id.videoId });
         goToVideo(lives[0].id.videoId);
         return;
       }
+
       showList(lives, `라이브 ${lives.length}개 — 선택해주세요`);
+
     } catch (e) {
       mainEl.innerHTML = `<div class="error-box">
         <div class="error-title">오류 발생</div>

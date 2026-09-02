@@ -132,9 +132,19 @@
   }
 
   /** format=json 전용 응답 (본문만 JSON 텍스트) */
+  
   function respondJson(obj) {
     const body = JSON.stringify(obj);
-    // fetch()에서 response.text() → JSON.parse 하기 쉽도록 문서 전체를 JSON으로
+  
+    // 부모 페이지(메인 livecam 사이트)에 결과 전달
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({
+        type: 'live-redirect-result',
+        ...obj
+      }, '*');
+    }
+  
+    // 기존 JSON 응답도 그대로 유지
     document.open();
     document.write(body);
     document.close();

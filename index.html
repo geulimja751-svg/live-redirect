@@ -76,27 +76,35 @@
   </style>
 </head>
 <body>
-<div class="container">
+<div class="container" id="uiRoot">
   <div class="status"><span class="live-dot"></span>LIVE</div>
   <div id="channel-name" class="channel-name"></div>
   <div id="main"></div>
 </div>
 <script>
-  // ★ API 키
   const API_KEY = 'AIzaSyBbGHS7EXSuj1t9V187FIr1flIfDMec3xA';
-
   const params = new URLSearchParams(location.search);
   const channelParam = params.get('channel') || '';
   const keywordParam = (params.get('keyword') || '').toLowerCase();
   const embedMode = params.get('embed') === '1' || params.get('embed') === 'true';
+  const jsonMode = params.get('format') === 'json';
+  const forceRefresh = params.get('force') === '1' || params.get('force') === 'true';
+
+  // JSON 모드: UI 숨김
+  if (jsonMode) {
+    document.getElementById('uiRoot').style.display = 'none';
+    document.title = 'json';
+  }
 
   document.getElementById('channel-name').textContent =
-    channelParam + (keywordParam ? ' · ' + keywordParam : '') + (embedMode ? ' · embed' : '');
+    channelParam + (keywordParam ? ' · ' + keywordParam : '') +
+    (embedMode ? ' · embed' : '') + (jsonMode ? ' · json' : '');
 
   const mainEl = document.getElementById('main');
-  mainEl.innerHTML = '<div class="spinner"></div><div class="loading-text" style="margin-top:16px">라이브 찾는 중...</div>';
+  if (!jsonMode) {
+    mainEl.innerHTML = '<div class="spinner"></div><div class="loading-text" style="margin-top:16px">라이브 찾는 중...</div>';
+  }
 
-  // ===== 캐시 설정 =====
   const CACHE_TTL = 12 * 60 * 60 * 1000; // 12시간
 
   function getCache(key) {
@@ -123,7 +131,20 @@
     } catch {}
   }
 
+  /** format=json 전용 응답 (본문만 JSON 텍스트) */
+  function respondJson(obj) {
+    const body = JSON.stringify(obj);
+    // fetch()에서 response.text() → JSON.parse 하기 쉽도록 문서 전체를 JSON으로
+    document.open();
+    document.write(body);
+    document.close();
+  }
+
   function goToVideo(videoId) {
+    if (jsonMode) {
+      respondJson({ ok: true, videoId, cached: false });
+      return;
+    }
     if (embedMode) {
       location.replace(
         'https://www.youtube.com/embed/' + videoId +
@@ -144,15 +165,14 @@
     }
   }
 
-  // 채널 ID 가져오기 (캐시 적용)
   async function getChannelId(handle) {
     const cacheKey = 'yt_ch_' + handle;
     const cached = getCache(cacheKey);
     if (cached) return cached;
-
     const h = handle.startsWith('@') ? handle.slice(1) : handle;
     const r = await fetch(
-      `https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=${encodeURIComponent(h)}&key=${API_KEY}`
+      'https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=' +
+      encodeURIComponent(h) + '&key=' + API_KEY
     );
     const d = await r.json();
     if (d.items && d.items.length > 0) {
@@ -163,11 +183,11 @@
     throw new Error('채널을 찾을 수 없습니다: ' + handle);
   }
 
-  // 영상이 아직 라이브인지 확인 (비용 1)
   async function isStillLive(videoId) {
     try {
       const r = await fetch(
-        `https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${videoId}&key=${API_KEY}`
+        'https://www.googleapis.com/youtube/v3/videos?part=snippet&id=' +
+        encodeURIComponent(videoId) + '&key=' + API_KEY
       );
       const d = await r.json();
       if (!d.items || d.items.length === 0) return false;
@@ -177,10 +197,11 @@
     }
   }
 
-  // 라이브 영상 검색 (Search Queries 소모)
   async function getLiveVideos(channelId) {
     const r = await fetch(
-      `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&eventType=live&type=video&maxResults=50&key=${API_KEY}`
+      'https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=' +
+      encodeURIComponent(channelId) +
+      '&eventType=live&type=video&maxResults=50&key=' + API_KEY
     );
     const d = await r.json();
     if (d.error) throw new Error(d.error.message);
@@ -188,21 +209,48 @@
   }
 
   function showList(lives, note) {
+    if (jsonMode) {
+      // 여러 개여도 JSON 모드는 첫 번째 선택
+      const v = lives[0];
+      if (v && v.id && v.id.videoId) {
+        respondJson({
+          ok: true,
+          videoId: v.id.videoId,
+          title: v.snippet && v.snippet.title,
+          cached: false,
+          note: note || ''
+        });
+      } else {
+        respondJson({ ok: false, error: 'no_live', message: note || '라이브 없음' });
+      }
+      return;
+    }
     const items = lives.map(v => {
       const vid = v.id.videoId;
       const title = v.snippet.title;
-      const thumb = v.snippet.thumbnails?.medium?.url || '';
+      const thumb = (v.snippet.thumbnails && v.snippet.thumbnails.medium && v.snippet.thumbnails.medium.url) || '';
       return `<a class="live-item" href="javascript:void(0)" onclick="goToVideo('${vid}')">
         <img class="thumb" src="${thumb}" alt="">
         <div class="live-info">
-          <div class="live-title">${title}</div>
+          <div class="live-title">${title.replace(/</g, '&lt;')}</div>
           <span class="badge-live">LIVE</span>
         </div>
       </a>`;
     }).join('');
-    mainEl.innerHTML = `
-      <div class="loading-text" style="margin-top:0;margin-bottom:4px;color:#666">${note}</div>
-      <div class="live-list">${items}</div>`;
+    mainEl.innerHTML =
+      `<div class="loading-text" style="margin-top:0;margin-bottom:4px;color:#666">${note}</div>` +
+      `<div class="live-list">${items}</div>`;
+  }
+
+  function pickAndGo(video, cacheKey, fromCache) {
+    const videoId = video.id.videoId;
+    const title = video.snippet && video.snippet.title;
+    setCache(cacheKey, { videoId, title });
+    if (jsonMode) {
+      respondJson({ ok: true, videoId, title, cached: !!fromCache });
+      return;
+    }
+    goToVideo(videoId);
   }
 
   async function run() {
@@ -211,26 +259,44 @@
       if (!API_KEY || API_KEY === 'YOUR_API_KEY_HERE') throw new Error('API 키를 설정해주세요');
 
       const channelId = await getChannelId(channelParam);
-
-      // 캐시 키 (채널 + 키워드 조합)
       const cacheKey = 'yt_live_' + channelId + (keywordParam ? '_' + keywordParam : '');
-      const cached = getCache(cacheKey);
 
-      // 1. 캐시에 영상 ID가 있으면 → 아직 라이브인지 확인
-      if (cached && cached.videoId) {
-        const stillLive = await isStillLive(cached.videoId);
-        if (stillLive) {
-          goToVideo(cached.videoId);
-          return;
+      // 1) 캐시 (force 아니면)
+      if (!forceRefresh) {
+        const cached = getCache(cacheKey);
+        if (cached && cached.videoId) {
+          const stillLive = await isStillLive(cached.videoId);
+          if (stillLive) {
+            if (jsonMode) {
+              respondJson({
+                ok: true,
+                videoId: cached.videoId,
+                title: cached.title || null,
+                cached: true
+              });
+              return;
+            }
+            goToVideo(cached.videoId);
+            return;
+          }
+          localStorage.removeItem(cacheKey);
         }
-        // 라이브 끝났으면 캐시 삭제하고 아래로 진행
-        localStorage.removeItem(cacheKey);
+      } else {
+        try { localStorage.removeItem(cacheKey); } catch (_) {}
       }
 
-      // 2. 새로 검색
+      // 2) 검색
       const lives = await getLiveVideos(channelId);
 
       if (lives.length === 0) {
+        if (jsonMode) {
+          respondJson({
+            ok: false,
+            error: 'no_live',
+            message: channelParam + ' 채널에 진행 중인 라이브가 없습니다.'
+          });
+          return;
+        }
         mainEl.innerHTML = `<div class="error-box">
           <div class="error-title">현재 라이브 없음</div>
           <div class="error-msg">${channelParam} 채널에 진행 중인 라이브가 없습니다.</div>
@@ -239,33 +305,26 @@
         return;
       }
 
-      let targetLives = lives;
-
       if (keywordParam) {
         const filtered = lives.filter(v =>
-          v.snippet.title.toLowerCase().includes(keywordParam)
+          (v.snippet.title || '').toLowerCase().includes(keywordParam)
         );
-
         if (filtered.length === 1) {
-          setCache(cacheKey, { videoId: filtered[0].id.videoId });
-          goToVideo(filtered[0].id.videoId);
+          pickAndGo(filtered[0], cacheKey, false);
           return;
         }
-
         if (filtered.length > 1) {
-          if (embedMode) {
-            setCache(cacheKey, { videoId: filtered[0].id.videoId });
-            goToVideo(filtered[0].id.videoId);
+          // embed / json 은 첫 번째 자동 선택
+          if (embedMode || jsonMode) {
+            pickAndGo(filtered[0], cacheKey, false);
             return;
           }
           showList(filtered, `"${keywordParam}" 관련 라이브 ${filtered.length}개`);
           return;
         }
-
         // 키워드 매칭 없음
-        if (embedMode && lives.length >= 1) {
-          setCache(cacheKey, { videoId: lives[0].id.videoId });
-          goToVideo(lives[0].id.videoId);
+        if ((embedMode || jsonMode) && lives.length >= 1) {
+          pickAndGo(lives[0], cacheKey, false);
           return;
         }
         showList(lives, `"${keywordParam}" 매칭 없음 — 전체 라이브 ${lives.length}개`);
@@ -273,15 +332,16 @@
       }
 
       // 키워드 없음
-      if (lives.length === 1 || embedMode) {
-        setCache(cacheKey, { videoId: lives[0].id.videoId });
-        goToVideo(lives[0].id.videoId);
+      if (lives.length === 1 || embedMode || jsonMode) {
+        pickAndGo(lives[0], cacheKey, false);
         return;
       }
-
       showList(lives, `라이브 ${lives.length}개 — 선택해주세요`);
-
     } catch (e) {
+      if (jsonMode) {
+        respondJson({ ok: false, error: 'exception', message: e.message || String(e) });
+        return;
+      }
       mainEl.innerHTML = `<div class="error-box">
         <div class="error-title">오류 발생</div>
         <div class="error-msg">${e.message}</div>

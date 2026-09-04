@@ -357,7 +357,33 @@
       return;
     }
 
-  run();
+    // 키워드 없음
+    if (lives.length === 1 || embedMode || jsonMode) {
+      pickAndGo(lives[0], cacheKey, false);
+      return;
+    }
+
+    showList(lives, `라이브 ${lives.length}개 — 선택해주세요`);
+
+  } catch (e) {
+    if (jsonMode) {
+      respondJson({
+        ok: false,
+        error: 'exception',
+        message: e.message || String(e)
+      });
+      return;
+    }
+
+    mainEl.innerHTML = `<div class="error-box">
+      <div class="error-title">오류 발생</div>
+      <div class="error-msg">${e.message}</div>
+      <a class="retry-btn" href="javascript:location.reload()">다시 시도</a>
+    </div>`;
+  }
+}
+
+run();
 </script>
 </body>
 </html>

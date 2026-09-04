@@ -316,49 +316,46 @@
       }
 
       if (keywordParam) {
-        const filtered = lives.filter(v =>
-          (v.snippet.title || '').toLowerCase().includes(keywordParam)
-        );
-        if (filtered.length === 1) {
+      // 제목 전체가 키워드와 정확히 일치하면 최우선 선택
+      const exact = lives.find(v =>
+        (v.snippet.title || '').toLowerCase() === keywordParam
+      );
+    
+      if (exact) {
+        pickAndGo(exact, cacheKey, false);
+        return;
+      }
+    
+      // 정확히 일치하는 제목이 없으면 기존처럼 부분 일치 검색
+      const filtered = lives.filter(v =>
+        (v.snippet.title || '').toLowerCase().includes(keywordParam)
+      );
+    
+      if (filtered.length === 1) {
+        pickAndGo(filtered[0], cacheKey, false);
+        return;
+      }
+    
+      if (filtered.length > 1) {
+        // embed / json 은 첫 번째 자동 선택
+        if (embedMode || jsonMode) {
           pickAndGo(filtered[0], cacheKey, false);
           return;
         }
-        if (filtered.length > 1) {
-          // embed / json 은 첫 번째 자동 선택
-          if (embedMode || jsonMode) {
-            pickAndGo(filtered[0], cacheKey, false);
-            return;
-          }
-          showList(filtered, `"${keywordParam}" 관련 라이브 ${filtered.length}개`);
-          return;
-        }
-        // 키워드 매칭 없음
-        if ((embedMode || jsonMode) && lives.length >= 1) {
-          pickAndGo(lives[0], cacheKey, false);
-          return;
-        }
-        showList(lives, `"${keywordParam}" 매칭 없음 — 전체 라이브 ${lives.length}개`);
+    
+        showList(filtered, `"${keywordParam}" 관련 라이브 ${filtered.length}개`);
         return;
       }
-
-      // 키워드 없음
-      if (lives.length === 1 || embedMode || jsonMode) {
+    
+      // 키워드 매칭 없음
+      if ((embedMode || jsonMode) && lives.length >= 1) {
         pickAndGo(lives[0], cacheKey, false);
         return;
       }
-      showList(lives, `라이브 ${lives.length}개 — 선택해주세요`);
-    } catch (e) {
-      if (jsonMode) {
-        respondJson({ ok: false, error: 'exception', message: e.message || String(e) });
-        return;
-      }
-      mainEl.innerHTML = `<div class="error-box">
-        <div class="error-title">오류 발생</div>
-        <div class="error-msg">${e.message}</div>
-        <a class="retry-btn" href="javascript:location.reload()">다시 시도</a>
-      </div>`;
+    
+      showList(lives, `"${keywordParam}" 매칭 없음 — 전체 라이브 ${lives.length}개`);
+      return;
     }
-  }
 
   run();
 </script>

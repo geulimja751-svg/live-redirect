@@ -85,7 +85,8 @@
   const API_KEY = 'AIzaSyBbGHS7EXSuj1t9V187FIr1flIfDMec3xA';
   const params = new URLSearchParams(location.search);
   const channelParam = params.get('channel') || '';
-  const keywordParam = (params.get('keyword') || '').toLowerCase();
+  const keywordParam = (params.get('keyword') || '').toLowerCase().trim();
+  const excludeParam = (params.get('exclude') || '').toLowerCase().trim();
   const embedMode = params.get('embed') === '1' || params.get('embed') === 'true';
   const jsonMode = params.get('format') === 'json';
   const forceRefresh = params.get('force') === '1' || params.get('force') === 'true';
@@ -97,8 +98,11 @@
   }
 
   document.getElementById('channel-name').textContent =
-    channelParam + (keywordParam ? ' · ' + keywordParam : '') +
-    (embedMode ? ' · embed' : '') + (jsonMode ? ' · json' : '');
+    channelParam +
+    (keywordParam ? ' · ' + keywordParam : '') +
+    (excludeParam ? ' · 제외:' + excludeParam : '') +
+    (embedMode ? ' · embed' : '') +
+    (jsonMode ? ' · json' : '');
 
   const mainEl = document.getElementById('main');
   if (!jsonMode) {
@@ -131,20 +135,16 @@
     } catch {}
   }
 
-  /** format=json 전용 응답 (본문만 JSON 텍스트) */
-  
   function respondJson(obj) {
     const body = JSON.stringify(obj);
-  
-    // 부모 페이지(메인 livecam 사이트)에 결과 전달
+
     if (window.parent && window.parent !== window) {
       window.parent.postMessage({
         type: 'live-redirect-result',
         ...obj
       }, '*');
     }
-  
-    // 기존 JSON 응답도 그대로 유지
+
     document.open();
     document.write(body);
     document.close();
@@ -220,7 +220,6 @@
 
   function showList(lives, note) {
     if (jsonMode) {
-      // 여러 개여도 JSON 모드는 첫 번째 선택
       const v = lives[0];
       if (v && v.id && v.id.videoId) {
         respondJson({
@@ -269,7 +268,10 @@
       if (!API_KEY || API_KEY === 'YOUR_API_KEY_HERE') throw new Error('API 키를 설정해주세요');
 
       const channelId = await getChannelId(channelParam);
-      const cacheKey = 'yt_live_' + channelId + (keywordParam ? '_' + keywordParam : '');
+      const cacheKey =
+        'yt_live_' + channelId +
+        (keywordParam ? '_' + keywordParam : '') +
+        (excludeParam ? '_ex_' + excludeParam : '');
 
       // 1) 캐시 (force 아니면)
       if (!forceRefresh) {
@@ -297,7 +299,6 @@
 
       // 2) 검색
       const lives = await getLiveVideos(channelId);
-
       if (lives.length === 0) {
         if (jsonMode) {
           respondJson({
@@ -315,75 +316,90 @@
         return;
       }
 
-      if (keywordParam) {
-      // 제목 전체가 키워드와 정확히 일치하면 최우선 선택
-      const exact = lives.find(v =>
-        (v.snippet.title || '').toLowerCase() === keywordParam
-      );
-    
-      if (exact) {
-        pickAndGo(exact, cacheKey, false);
-        return;
-      }
-    
-      // 정확히 일치하는 제목이 없으면 기존처럼 부분 일치 검색
-      const filtered = lives.filter(v =>
-        (v.snippet.title || '').toLowerCase().includes(keywordParam)
-      );
-    
-      if (filtered.length === 1) {
-        pickAndGo(filtered[0], cacheKey, false);
-        return;
-      }
-    
-      if (filtered.length > 1) {
-        // embed / json 은 첫 번째 자동 선택
-        if (embedMode || jsonMode) {
+      // 3) keyword / exclude 필터
+      if (keywordParam || excludeParam) {
+        const excludes = excludeParam
+          ? excludeParam.split(',').map(s => s.trim()).filter(Boolean)
+          : [];
+
+        const filtered = lives.filter(v => {
+          const title = (v.snippet.title || '').toLowerCase();
+
+          if (keywordParam && !title.includes(keywordParam)) return false;
+
+          for (const ex of excludes) {
+            if (title.includes(ex)) return false;
+          }
+          return true;
+        });
+
+        // 정확 일치 최우선 (exclude 없을 때만)
+        if (keywordParam && excludes.length === 0) {
+          const exact = lives.find(v =>
+            (v.snippet.title || '').toLowerCase().trim() === keywordParam
+          );
+          if (exact) {
+            pickAndGo(exact, cacheKey, false);
+            return;
+          }
+        }
+
+        if (filtered.length === 1) {
           pickAndGo(filtered[0], cacheKey, false);
           return;
         }
-    
-        showList(filtered, `"${keywordParam}" 관련 라이브 ${filtered.length}개`);
+
+        if (filtered.length > 1) {
+          if (embedMode || jsonMode) {
+            pickAndGo(filtered[0], cacheKey, false);
+            return;
+          }
+          const note = keywordParam
+            ? `"${keywordParam}" 관련 라이브 ${filtered.length}개`
+            : `제외 필터 적용 · 라이브 ${filtered.length}개`;
+          showList(filtered, note);
+          return;
+        }
+
+        // 매칭 없음
+        if ((embedMode || jsonMode) && lives.length >= 1) {
+          pickAndGo(lives[0], cacheKey, false);
+          return;
+        }
+
+        showList(
+          lives,
+          keywordParam
+            ? `"${keywordParam}" 매칭 없음 — 전체 라이브 ${lives.length}개`
+            : `제외 조건에 맞는 라이브 없음 — 전체 ${lives.length}개`
+        );
         return;
       }
-    
-      // 키워드 매칭 없음
-      if ((embedMode || jsonMode) && lives.length >= 1) {
+
+      // 키워드/제외 없음
+      if (lives.length === 1 || embedMode || jsonMode) {
         pickAndGo(lives[0], cacheKey, false);
         return;
       }
-    
-      showList(lives, `"${keywordParam}" 매칭 없음 — 전체 라이브 ${lives.length}개`);
-      return;
+      showList(lives, `라이브 ${lives.length}개 — 선택해주세요`);
+    } catch (e) {
+      if (jsonMode) {
+        respondJson({
+          ok: false,
+          error: 'exception',
+          message: e.message || String(e)
+        });
+        return;
+      }
+      mainEl.innerHTML = `<div class="error-box">
+        <div class="error-title">오류 발생</div>
+        <div class="error-msg">${e.message}</div>
+        <a class="retry-btn" href="javascript:location.reload()">다시 시도</a>
+      </div>`;
     }
-
-    // 키워드 없음
-    if (lives.length === 1 || embedMode || jsonMode) {
-      pickAndGo(lives[0], cacheKey, false);
-      return;
-    }
-
-    showList(lives, `라이브 ${lives.length}개 — 선택해주세요`);
-
-  } catch (e) {
-    if (jsonMode) {
-      respondJson({
-        ok: false,
-        error: 'exception',
-        message: e.message || String(e)
-      });
-      return;
-    }
-
-    mainEl.innerHTML = `<div class="error-box">
-      <div class="error-title">오류 발생</div>
-      <div class="error-msg">${e.message}</div>
-      <a class="retry-btn" href="javascript:location.reload()">다시 시도</a>
-    </div>`;
   }
-}
 
-run();
+  run();
 </script>
 </body>
 </html>

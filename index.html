@@ -137,14 +137,12 @@
 
   function respondJson(obj) {
     const body = JSON.stringify(obj);
-
     if (window.parent && window.parent !== window) {
       window.parent.postMessage({
         type: 'live-redirect-result',
         ...obj
       }, '*');
     }
-
     document.open();
     document.write(body);
     document.close();
@@ -179,6 +177,7 @@
     const cacheKey = 'yt_ch_' + handle;
     const cached = getCache(cacheKey);
     if (cached) return cached;
+
     const h = handle.startsWith('@') ? handle.slice(1) : handle;
     const r = await fetch(
       'https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=' +
@@ -207,6 +206,7 @@
     }
   }
 
+  // 기존 방식: search.list
   async function getLiveVideos(channelId) {
     const r = await fetch(
       'https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=' +
@@ -216,6 +216,45 @@
     const d = await r.json();
     if (d.error) throw new Error(d.error.message);
     return d.items || [];
+  }
+
+  // ★ 새로 추가: fallback (uploads + videos.list)
+  async function getLiveVideosFallback(channelId) {
+    // 1. uploads 플레이리스트 ID 가져오기
+    const chRes = await fetch(
+      'https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id=' +
+      encodeURIComponent(channelId) + '&key=' + API_KEY
+    );
+    const chData = await chRes.json();
+    const uploadsId = chData.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
+    if (!uploadsId) return [];
+
+    // 2. 최근 영상 15개 가져오기
+    const plRes = await fetch(
+      'https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&playlistId=' +
+      encodeURIComponent(uploadsId) + '&maxResults=15&key=' + API_KEY
+    );
+    const plData = await plRes.json();
+    const videoIds = (plData.items || [])
+      .map(i => i.contentDetails?.videoId)
+      .filter(Boolean);
+
+    if (videoIds.length === 0) return [];
+
+    // 3. live 상태 확인
+    const vRes = await fetch(
+      'https://www.googleapis.com/youtube/v3/videos?part=snippet&id=' +
+      videoIds.join(',') + '&key=' + API_KEY
+    );
+    const vData = await vRes.json();
+
+    // search.list와 비슷한 형태로 변환해서 반환
+    return (vData.items || [])
+      .filter(v => v.snippet?.liveBroadcastContent === 'live')
+      .map(v => ({
+        id: { videoId: v.id },
+        snippet: v.snippet
+      }));
   }
 
   function showList(lives, note) {
@@ -297,8 +336,18 @@
         try { localStorage.removeItem(cacheKey); } catch (_) {}
       }
 
-      // 2) 검색
-      const lives = await getLiveVideos(channelId);
+      // 2) 검색 (기본 방식)
+      let lives = await getLiveVideos(channelId);
+
+      // ★ 3) fallback: search.list 결과가 없고, 키워드/제외가 없을 때만
+      if (lives.length === 0 && !keywordParam && !excludeParam) {
+        try {
+          lives = await getLiveVideosFallback(channelId);
+        } catch (e) {
+          console.warn('fallback failed', e);
+        }
+      }
+
       if (lives.length === 0) {
         if (jsonMode) {
           respondJson({
@@ -316,17 +365,14 @@
         return;
       }
 
-      // 3) keyword / exclude 필터
+      // 4) keyword / exclude 필터
       if (keywordParam || excludeParam) {
         const excludes = excludeParam
           ? excludeParam.split(',').map(s => s.trim()).filter(Boolean)
           : [];
-
         const filtered = lives.filter(v => {
           const title = (v.snippet.title || '').toLowerCase();
-
           if (keywordParam && !title.includes(keywordParam)) return false;
-
           for (const ex of excludes) {
             if (title.includes(ex)) return false;
           }
@@ -348,7 +394,6 @@
           pickAndGo(filtered[0], cacheKey, false);
           return;
         }
-
         if (filtered.length > 1) {
           if (embedMode || jsonMode) {
             pickAndGo(filtered[0], cacheKey, false);
@@ -366,7 +411,6 @@
           pickAndGo(lives[0], cacheKey, false);
           return;
         }
-
         showList(
           lives,
           keywordParam
@@ -382,6 +426,7 @@
         return;
       }
       showList(lives, `라이브 ${lives.length}개 — 선택해주세요`);
+
     } catch (e) {
       if (jsonMode) {
         respondJson({

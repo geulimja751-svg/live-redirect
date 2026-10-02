@@ -91,7 +91,6 @@
   const jsonMode = params.get('format') === 'json';
   const forceRefresh = params.get('force') === '1' || params.get('force') === 'true';
 
-  // JSON 모드: UI 숨김
   if (jsonMode) {
     document.getElementById('uiRoot').style.display = 'none';
     document.title = 'json';
@@ -109,7 +108,7 @@
     mainEl.innerHTML = '<div class="spinner"></div><div class="loading-text" style="margin-top:16px">라이브 찾는 중...</div>';
   }
 
-  const CACHE_TTL = 12 * 60 * 60 * 1000; // 12시간
+  const CACHE_TTL = 12 * 60 * 60 * 1000;
 
   function getCache(key) {
     try {
@@ -206,7 +205,6 @@
     }
   }
 
-  // 기존 방식: search.list
   async function getLiveVideos(channelId) {
     const r = await fetch(
       'https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=' +
@@ -218,9 +216,8 @@
     return d.items || [];
   }
 
-  // ★ 새로 추가: fallback (uploads + videos.list)
+  // fallback (키워드/exclude 없을 때만 사용)
   async function getLiveVideosFallback(channelId) {
-    // 1. uploads 플레이리스트 ID 가져오기
     const chRes = await fetch(
       'https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id=' +
       encodeURIComponent(channelId) + '&key=' + API_KEY
@@ -229,7 +226,6 @@
     const uploadsId = chData.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
     if (!uploadsId) return [];
 
-    // 2. 최근 영상 15개 가져오기
     const plRes = await fetch(
       'https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&playlistId=' +
       encodeURIComponent(uploadsId) + '&maxResults=15&key=' + API_KEY
@@ -241,14 +237,12 @@
 
     if (videoIds.length === 0) return [];
 
-    // 3. live 상태 확인
     const vRes = await fetch(
       'https://www.googleapis.com/youtube/v3/videos?part=snippet&id=' +
       videoIds.join(',') + '&key=' + API_KEY
     );
     const vData = await vRes.json();
 
-    // search.list와 비슷한 형태로 변환해서 반환
     return (vData.items || [])
       .filter(v => v.snippet?.liveBroadcastContent === 'live')
       .map(v => ({
@@ -301,6 +295,22 @@
     goToVideo(videoId);
   }
 
+  function showNoLive(message) {
+    if (jsonMode) {
+      respondJson({
+        ok: false,
+        error: 'no_live',
+        message: message
+      });
+      return;
+    }
+    mainEl.innerHTML = `<div class="error-box">
+      <div class="error-title">현재 라이브 없음</div>
+      <div class="error-msg">${message}</div>
+      <a class="retry-btn" href="https://www.youtube.com/${channelParam}" target="_blank">채널 바로가기</a>
+    </div>`;
+  }
+
   async function run() {
     try {
       if (!channelParam) throw new Error('URL에 ?channel=@채널명 을 추가해주세요');
@@ -312,7 +322,7 @@
         (keywordParam ? '_' + keywordParam : '') +
         (excludeParam ? '_ex_' + excludeParam : '');
 
-      // 1) 캐시 (force 아니면)
+      // 1) 캐시
       if (!forceRefresh) {
         const cached = getCache(cacheKey);
         if (cached && cached.videoId) {
@@ -336,10 +346,10 @@
         try { localStorage.removeItem(cacheKey); } catch (_) {}
       }
 
-      // 2) 검색 (기본 방식)
+      // 2) 검색
       let lives = await getLiveVideos(channelId);
 
-      // ★ 3) fallback: search.list 결과가 없고, 키워드/제외가 없을 때만
+      // 3) fallback (키워드/exclude 없을 때만)
       if (lives.length === 0 && !keywordParam && !excludeParam) {
         try {
           lives = await getLiveVideosFallback(channelId);
@@ -349,19 +359,7 @@
       }
 
       if (lives.length === 0) {
-        if (jsonMode) {
-          respondJson({
-            ok: false,
-            error: 'no_live',
-            message: channelParam + ' 채널에 진행 중인 라이브가 없습니다.'
-          });
-          return;
-        }
-        mainEl.innerHTML = `<div class="error-box">
-          <div class="error-title">현재 라이브 없음</div>
-          <div class="error-msg">${channelParam} 채널에 진행 중인 라이브가 없습니다.</div>
-          <a class="retry-btn" href="https://www.youtube.com/${channelParam}" target="_blank">채널 바로가기</a>
-        </div>`;
+        showNoLive(channelParam + ' 채널에 진행 중인 라이브가 없습니다.');
         return;
       }
 
@@ -370,6 +368,7 @@
         const excludes = excludeParam
           ? excludeParam.split(',').map(s => s.trim()).filter(Boolean)
           : [];
+
         const filtered = lives.filter(v => {
           const title = (v.snippet.title || '').toLowerCase();
           if (keywordParam && !title.includes(keywordParam)) return false;
@@ -379,7 +378,7 @@
           return true;
         });
 
-        // 정확 일치 최우선 (exclude 없을 때만)
+        // 정확 일치 최우선
         if (keywordParam && excludes.length === 0) {
           const exact = lives.find(v =>
             (v.snippet.title || '').toLowerCase().trim() === keywordParam
@@ -394,7 +393,9 @@
           pickAndGo(filtered[0], cacheKey, false);
           return;
         }
+
         if (filtered.length > 1) {
+          // 여러 개면 embed/json일 때는 첫 번째, 아니면 목록
           if (embedMode || jsonMode) {
             pickAndGo(filtered[0], cacheKey, false);
             return;
@@ -406,16 +407,11 @@
           return;
         }
 
-        // 매칭 없음
-        if ((embedMode || jsonMode) && lives.length >= 1) {
-          pickAndGo(lives[0], cacheKey, false);
-          return;
-        }
-        showList(
-          lives,
+        // ★ 핵심 수정: 매칭되는 게 없으면 다른 라이브로 절대 넘어가지 않음
+        showNoLive(
           keywordParam
-            ? `"${keywordParam}" 매칭 없음 — 전체 라이브 ${lives.length}개`
-            : `제외 조건에 맞는 라이브 없음 — 전체 ${lives.length}개`
+            ? `"${keywordParam}" 키워드에 맞는 라이브가 없습니다.`
+            : `제외 조건에 맞는 라이브가 없습니다.`
         );
         return;
       }

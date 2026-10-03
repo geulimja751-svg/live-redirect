@@ -228,7 +228,7 @@
 
     const plRes = await fetch(
       'https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&playlistId=' +
-      encodeURIComponent(uploadsId) + '&maxResults=15&key=' + API_KEY
+      encodeURIComponent(uploadsId) + '&maxResults=50&key=' + API_KEY
     );
     const plData = await plRes.json();
     const videoIds = (plData.items || [])
@@ -346,16 +346,24 @@
         try { localStorage.removeItem(cacheKey); } catch (_) {}
       }
 
-      // 2) 검색
-      let lives = await getLiveVideos(channelId);
-
-      // 3) fallback (키워드/exclude 없을 때만)
-      if (lives.length === 0 && !keywordParam && !excludeParam) {
-        try {
-          lives = await getLiveVideosFallback(channelId);
-        } catch (e) {
-          console.warn('fallback failed', e);
+      let lives = [];
+      try {
+        lives = await getLiveVideos(channelId);
+      } catch (e) {
+        console.warn('search failed', e);
+      }
+      
+      try {
+        const fb = await getLiveVideosFallback(channelId);
+        const seen = new Set(lives.map(v => v.id.videoId));
+        for (const v of fb) {
+          if (!seen.has(v.id.videoId)) {
+            lives.push(v);
+            seen.add(v.id.videoId);
+          }
         }
+      } catch (e) {
+        console.warn('fallback failed', e);
       }
 
       if (lives.length === 0) {

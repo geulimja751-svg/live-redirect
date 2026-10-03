@@ -228,7 +228,7 @@
 
     const plRes = await fetch(
       'https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&playlistId=' +
-      encodeURIComponent(uploadsId) + '&maxResults=50&key=' + API_KEY
+      encodeURIComponent(uploadsId) + '&maxResults=15&key=' + API_KEY
     );
     const plData = await plRes.json();
     const videoIds = (plData.items || [])

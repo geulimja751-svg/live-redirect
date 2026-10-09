@@ -94,6 +94,10 @@
   const jsonMode = params.get('format') === 'json';
   const forceRefresh = params.get('force') === '1' || params.get('force') === 'true';
   const debugMode = params.get('debug') === '1' || params.get('debug') === 'true';
+  // &video=영상ID : 방송 중이면 이 영상을 최우선으로 사용 (가장 확실, quota 1)
+  const videoParam = (params.get('video') || '').trim();
+  // &depth=페이지수 : 업로드 목록을 몇 페이지(50개씩)까지 볼지 (기본 20, 최대 40)
+  const MAX_PAGES = Math.min(Math.max(parseInt(params.get('depth'), 10) || 20, 1), 40);
 
   if (jsonMode) {
     document.getElementById('uiRoot').style.display = 'none';
@@ -243,29 +247,38 @@
 
   // ---------- 방법 1 (싸다): 업로드 재생목록 + videos.list ----------
   // 약 3~4 quota. 최대 100개까지 확인
-  async function getLiveFromUploads(channelId) {
+  // 페이지(50개)마다 videos.list로 확인하고, 조건에 맞는 라이브를 찾으면 바로 중단
+  // 최대 depth 페이지(기본 20 = 1000개). 페이지당 약 2 quota
+  async function getLiveFromUploads(channelId, matchFn) {
     const uploadsId = 'UU' + channelId.slice(2);
-    const ids = [];
+    const lives = [];
     let pageToken;
-    for (let i = 0; i < 2; i++) {
+    let scanned = 0;
+    let pages = 0;
+    for (let i = 0; i < MAX_PAGES; i++) {
       const q = { part: 'contentDetails', playlistId: uploadsId, maxResults: 50 };
       if (pageToken) q.pageToken = pageToken;
       const pl = await yt('playlistItems', q);
-      ids.push(...(pl.items || []).map(x => x.contentDetails && x.contentDetails.videoId).filter(Boolean));
+      const ids = (pl.items || [])
+        .map(x => x.contentDetails && x.contentDetails.videoId)
+        .filter(Boolean);
+      pages++;
+      scanned += ids.length;
+
+      if (ids.length > 0) {
+        const v = await yt('videos', { part: 'snippet', id: ids.join(',') });
+        for (const x of (v.items || [])) {
+          if (x.snippet && x.snippet.liveBroadcastContent === 'live') {
+            lives.push({ id: { videoId: x.id }, snippet: x.snippet });
+          }
+        }
+      }
+
+      if (matchFn && lives.some(matchFn)) break; // 찾았으면 더 안 뒤짐
       pageToken = pl.nextPageToken;
       if (!pageToken) break;
     }
-    dbg('uploads 확인 영상 수: ' + ids.length);
-
-    const lives = [];
-    for (let i = 0; i < ids.length; i += 50) {
-      const v = await yt('videos', { part: 'snippet', id: ids.slice(i, i + 50).join(',') });
-      for (const x of (v.items || [])) {
-        if (x.snippet && x.snippet.liveBroadcastContent === 'live') {
-          lives.push({ id: { videoId: x.id }, snippet: x.snippet });
-        }
-      }
-    }
+    dbg('uploads 확인 영상 수: ' + scanned + ' (' + pages + '페이지)');
     dbg('uploads 라이브: ' + lives.length + '개');
     return lives;
   }
@@ -386,6 +399,21 @@
         (keywordParam ? '_' + keywordParam : '') +
         (excludeParam ? '_ex_' + excludeParam : '');
 
+      // 0) video 파라미터로 직접 지정한 경우: 방송 중이면 바로 사용
+      if (videoParam) {
+        try {
+          const vd = await yt('videos', { part: 'snippet', id: videoParam });
+          const it = vd.items && vd.items[0];
+          if (it && it.snippet.liveBroadcastContent === 'live') {
+            pickAndGo({ id: { videoId: it.id }, snippet: it.snippet }, cacheKey, false);
+            return;
+          }
+          dbg('video=' + videoParam + ' 은(는) 현재 방송 중이 아님 → 제목 검색으로 진행');
+        } catch (e) {
+          dbg('video 확인 실패: ' + e.message);
+        }
+      }
+
       // 1) 캐시
       if (!forceRefresh) {
         const cached = getCache(cacheKey);
@@ -421,7 +449,7 @@
       const errors = [];
       let lives = [];
       try {
-        lives = await getLiveFromUploads(channelId);
+        lives = await getLiveFromUploads(channelId, matches);
       } catch (e) {
         errors.push(e);
         dbg('uploads 실패: ' + e.message);

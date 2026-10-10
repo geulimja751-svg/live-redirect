@@ -144,6 +144,15 @@
     return t.toLowerCase().replace(/\s+/g, '');
   }
 
+  // 무시된 방송 기록 (debug=1 화면에 표시)
+  const ignoredUpcoming = [];  // 예정(시작 전) 방송
+  const ignoredEnded = [];     // 'live'로 표시되지만 종료된 방송
+  function fmtTime(t) {
+    const d = new Date(t);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
   const debugLog = [];
   function dbg(msg) {
     debugLog.push(msg);
@@ -328,10 +337,16 @@
         // 제목이 아니라 "방송 상태"로 판별 (videos.list 1 quota / 50개)
         for (const x of (v.items || [])) {
           const st = x.snippet && x.snippet.liveBroadcastContent;
-          if (st === 'upcoming') nUpcoming++;
-          else if (st === 'live') {
+          const det = x.liveStreamingDetails || {};
+          if (st === 'upcoming') {
+            nUpcoming++;
+            ignoredUpcoming.push({ title: x.snippet.title, at: det.scheduledStartTime });
+          } else if (st === 'live') {
             if (isRealLive(x)) lives.push(toLiveItem(x));
-            else nEnded++;
+            else {
+              nEnded++;
+              ignoredEnded.push({ title: x.snippet.title, at: det.actualEndTime });
+            }
           } else nNormal++;
         }
       }
@@ -428,6 +443,16 @@
     if (extraTitles && extraTitles.length) {
       lines.push('가져온 라이브 제목:');
       extraTitles.forEach(t => lines.push(' - ' + t));
+    }
+    if (ignoredUpcoming.length) {
+      lines.push('예정으로 무시됨 ' + ignoredUpcoming.length + '개:');
+      ignoredUpcoming.slice(0, 30).forEach(u =>
+        lines.push(' - ' + u.title + (u.at ? '  [예정 ' + fmtTime(u.at) + ']' : '')));
+    }
+    if (ignoredEnded.length) {
+      lines.push('종료됨으로 무시됨 ' + ignoredEnded.length + '개:');
+      ignoredEnded.slice(0, 30).forEach(u =>
+        lines.push(' - ' + u.title + (u.at ? '  [종료 ' + fmtTime(u.at) + ']' : '')));
     }
     return '<div class="debug">' + lines.map(escHtml).join('<br>') + '</div>';
   }

@@ -66,8 +66,7 @@
     }
     .error-box { background:#1a0f0f; border:1px solid #3d1515; border-radius:10px; padding:20px; margin-top:24px; }
     .error-title { font-size:14px; font-weight:600; color:#ff6b6b; margin-bottom:8px; }
-    .error-msg { font-size:12px; color:#888; line-height:1.6; word-break:break-word; }
-    .debug { margin-top:14px; text-align:left; font-size:11px; color:#666; line-height:1.6; word-break:break-word; }
+    .error-msg { font-size:12px; color:#888; line-height:1.6; }
     .retry-btn {
       display:inline-block; margin-top:16px; padding:8px 20px;
       background:#1e1e1e; border:1px solid #333; border-radius:6px;
@@ -83,127 +82,30 @@
   <div id="main"></div>
 </div>
 <script>
-  // ⚠️ 새로 발급한 키를 넣으세요. (Cloud Console에서 HTTP 리퍼러 + YouTube Data API v3 제한 필수)
   const API_KEY = 'AIzaSyBbGHS7EXSuj1t9V187FIr1flIfDMec3xA';
-
   const params = new URLSearchParams(location.search);
   const channelParam = params.get('channel') || '';
-  // keyword에 인코딩 안 된 '#'이 들어가면 브라우저가 뒤쪽을 hash로 잘라버림
-  // (예: keyword=#道頓堀 #ライブカメラ → keyword='' + hash='#道頓堀 #ライブカメラ') → 복구
-  let rawKeyword = params.get('keyword') || '';
-  if (!rawKeyword && location.hash.length > 1) {
-    try { rawKeyword = decodeURIComponent(location.hash); }
-    catch (_) { rawKeyword = location.hash; }
-  }
-  const keywordParam = rawKeyword.toLowerCase().trim();
-  // &any=1 : 키워드 없이도 아무 라이브나 자동 선택 허용 (기본은 키워드 필수)
-  const anyMode = params.get('any') === '1' || params.get('any') === 'true';
-  // &pick=latest : 여러 개가 걸리면 목록 대신 "가장 진짜 같은 최신 라이브"를 자동 선택
-  const pickLatest = params.get('pick') === 'latest';
-  // &fallback=1 : 키워드에 맞는 라이브가 없을 때, 이 채널의 다른 라이브(가장 진짜 같은 것)를 자동으로 열기
-  //               (기본은 목록만 보여주고 클릭해서 열기. 지도 해석용 format=json 에서는 절대 적용 안 됨)
-  const fallbackOpen = params.get('fallback') === '1' || params.get('fallback') === 'true';
-  const excludeParam = (params.get('exclude') || '').toLowerCase().trim();
+  const keywordParam = (params.get('keyword') || '').toLowerCase();
   const embedMode = params.get('embed') === '1' || params.get('embed') === 'true';
   const jsonMode = params.get('format') === 'json';
   const forceRefresh = params.get('force') === '1' || params.get('force') === 'true';
-  const debugMode = params.get('debug') === '1' || params.get('debug') === 'true';
-  // &video=영상ID : 방송 중이면 이 영상을 최우선으로 사용 (가장 확실, quota 1)
-  const videoParam = (params.get('video') || '').trim();
-  // &depth=페이지수 : 업로드 목록을 몇 페이지(50개씩)까지 볼지
-  // 기본 4 = 최근 200개 (갓 시작한 방송 위주로 빠르게). 깊게 찾으려면 &depth=40 처럼 직접 지정 (느리고 quota 소모)
-  const MAX_PAGES = Math.min(Math.max(parseInt(params.get('depth'), 10) || 4, 1), 100);
 
+  // JSON 모드: UI 숨김
   if (jsonMode) {
     document.getElementById('uiRoot').style.display = 'none';
     document.title = 'json';
   }
 
   document.getElementById('channel-name').textContent =
-    channelParam +
-    (keywordParam ? ' · ' + keywordParam : '') +
-    (excludeParam ? ' · 제외:' + excludeParam : '') +
-    (embedMode ? ' · embed' : '') +
-    (jsonMode ? ' · json' : '');
+    channelParam + (keywordParam ? ' · ' + keywordParam : '') +
+    (embedMode ? ' · embed' : '') + (jsonMode ? ' · json' : '');
 
   const mainEl = document.getElementById('main');
   if (!jsonMode) {
     mainEl.innerHTML = '<div class="spinner"></div><div class="loading-text" style="margin-top:16px">라이브 찾는 중...</div>';
   }
 
-  const CACHE_TTL = 12 * 60 * 60 * 1000;
-
-  // ---------- 유틸 ----------
-  function escHtml(s) {
-    return String(s == null ? '' : s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
-
-  // 비교용 정규화: NFKC(전각↔반각 통일) + 소문자 + 모든 공백 제거
-  // 예: "ＬＩＶＥ" = "LIVE", "ﾗｲﾌﾞ" = "ライブ", 띄어쓰기 차이 무시
-  function norm(s) {
-    let t = String(s || '');
-    try { t = t.normalize('NFKC'); } catch (_) {}
-    return t.toLowerCase().replace(/\s+/g, '');
-  }
-
-  // 무시된 방송 기록 (debug=1 화면에 표시)
-  const ignoredUpcoming = [];  // 예정(시작 전) 방송
-  const ignoredEnded = [];     // 'live'로 표시되지만 종료된 방송
-  function fmtTime(t) {
-    const d = new Date(t);
-    if (isNaN(d.getTime())) return '';
-    return d.toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-  }
-
-  const debugLog = [];
-  function dbg(msg) {
-    debugLog.push(msg);
-    console.log('[live]', msg);
-  }
-
-  // ---------- 라이브 판별 / 정렬 ----------
-  // liveBroadcastContent가 'live'여도 이미 종료된 방송(actualEndTime 있음)은 제외
-  function isRealLive(x) {
-    if (!x || !x.snippet) return false;
-    if (x.snippet.liveBroadcastContent !== 'live') return false;
-    const d = x.liveStreamingDetails || {};
-    return !d.actualEndTime;
-  }
-  function toLiveItem(x) {
-    return { id: { videoId: x.id }, snippet: x.snippet, live: x.liveStreamingDetails || {} };
-  }
-  function viewersOf(v) {
-    const raw = v.live && v.live.concurrentViewers;
-    if (raw == null || raw === '') return null;
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : null;
-  }
-  function startOf(v) {
-    const t = Date.parse(v.live && v.live.actualStartTime);
-    return Number.isFinite(t) ? t : 0;
-  }
-  // 시청자 수가 잡히는 것 우선, 그다음 가장 최근에 시작한 것 우선
-  function rankSort(a, b) {
-    const ha = viewersOf(a) != null ? 1 : 0;
-    const hb = viewersOf(b) != null ? 1 : 0;
-    if (ha !== hb) return hb - ha;
-    return startOf(b) - startOf(a);
-  }
-  function liveMeta(v) {
-    const parts = [];
-    const st = startOf(v);
-    if (st) parts.push('시작 ' + new Date(st).toLocaleString('ko-KR', {
-      month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
-    }));
-    const n = viewersOf(v);
-    parts.push(n != null ? '시청 ' + n.toLocaleString('ko-KR') + '명' : '시청자 정보 없음');
-    return parts.join(' · ');
-  }
-  function describe(v) {
-    return (v.snippet && v.snippet.title || '') + '  [' + liveMeta(v) + ']';
-  }
+  const CACHE_TTL = 12 * 60 * 60 * 1000; // 12시간
 
   function getCache(key) {
     try {
@@ -229,34 +131,20 @@
     } catch {}
   }
 
-  // ---------- API 헬퍼 (에러를 숨기지 않음) ----------
-  async function yt(path, query) {
-    const url = 'https://www.googleapis.com/youtube/v3/' + path + '?' +
-      new URLSearchParams({ ...query, key: API_KEY });
-    const res = await fetch(url);
-    let d;
-    try {
-      d = await res.json();
-    } catch {
-      throw new Error('[' + path + '] 응답을 해석할 수 없습니다 (HTTP ' + res.status + ')');
-    }
-    if (d.error) {
-      const reason = (d.error.errors && d.error.errors[0] && d.error.errors[0].reason) || '';
-      const err = new Error('[' + path + '] ' + d.error.code + ' ' + reason + ': ' + d.error.message);
-      err.reason = reason;
-      throw err;
-    }
-    return d;
-  }
-
+  /** format=json 전용 응답 (본문만 JSON 텍스트) */
+  
   function respondJson(obj) {
     const body = JSON.stringify(obj);
+  
+    // 부모 페이지(메인 livecam 사이트)에 결과 전달
     if (window.parent && window.parent !== window) {
       window.parent.postMessage({
         type: 'live-redirect-result',
         ...obj
       }, '*');
     }
+  
+    // 기존 JSON 응답도 그대로 유지
     document.open();
     document.write(body);
     document.close();
@@ -287,151 +175,52 @@
     }
   }
 
-  // ---------- 채널 ID ----------
-  async function getChannelId(input) {
-    // 이미 UC... 형식이면 API 호출 불필요
-    if (/^UC[\w-]{22}$/.test(input)) return input;
-
-    const cacheKey = 'yt_ch_' + input;
+  async function getChannelId(handle) {
+    const cacheKey = 'yt_ch_' + handle;
     const cached = getCache(cacheKey);
     if (cached) return cached;
-
-    const h = input.startsWith('@') ? input.slice(1) : input;
-    const d = await yt('channels', { part: 'id', forHandle: h });
+    const h = handle.startsWith('@') ? handle.slice(1) : handle;
+    const r = await fetch(
+      'https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=' +
+      encodeURIComponent(h) + '&key=' + API_KEY
+    );
+    const d = await r.json();
     if (d.items && d.items.length > 0) {
       const id = d.items[0].id;
       setCache(cacheKey, id);
       return id;
     }
-    throw new Error('채널을 찾을 수 없습니다: ' + input);
+    throw new Error('채널을 찾을 수 없습니다: ' + handle);
   }
 
-  // ---------- 라이브 여부 확인 ----------
-  // 에러(quota 등)는 "종료"로 오판하지 않고 위로 던진다
   async function isStillLive(videoId) {
-    const d = await yt('videos', { part: 'snippet,liveStreamingDetails', id: videoId });
-    if (!d.items || d.items.length === 0) return false;
-    return isRealLive(d.items[0]);
-  }
-
-  // ---------- 방법 1 (싸다): 업로드 재생목록 + videos.list ----------
-  // 페이지(50개)마다 videos.list로 확인하고, 조건에 맞는 라이브를 찾으면 바로 중단
-  // 최대 depth 페이지(기본 4 = 200개). 페이지당 약 2 quota
-  async function getLiveFromUploads(channelId, matchFn) {
-    const uploadsId = 'UU' + channelId.slice(2);
-    const lives = [];
-    let pageToken;
-    let scanned = 0;
-    let pages = 0;
-    let nUpcoming = 0;   // 예정(아직 시작 전) 방송
-    let nEnded = 0;      // 'live'로 표시되지만 종료 시각이 있는 방송
-    let nNormal = 0;     // 일반 영상/종료된 방송 (liveBroadcastContent = none)
-    for (let i = 0; i < MAX_PAGES; i++) {
-      const q = { part: 'contentDetails', playlistId: uploadsId, maxResults: 50 };
-      if (pageToken) q.pageToken = pageToken;
-      const pl = await yt('playlistItems', q);
-      const ids = (pl.items || [])
-        .map(x => x.contentDetails && x.contentDetails.videoId)
-        .filter(Boolean);
-      pages++;
-      scanned += ids.length;
-
-      if (ids.length > 0) {
-        const v = await yt('videos', { part: 'snippet,liveStreamingDetails', id: ids.join(',') });
-        // 제목이 아니라 "방송 상태"로 판별 (videos.list 1 quota / 50개)
-        for (const x of (v.items || [])) {
-          const st = x.snippet && x.snippet.liveBroadcastContent;
-          const det = x.liveStreamingDetails || {};
-          if (st === 'upcoming') {
-            nUpcoming++;
-            ignoredUpcoming.push({ title: x.snippet.title, at: det.scheduledStartTime });
-          } else if (st === 'live') {
-            if (isRealLive(x)) lives.push(toLiveItem(x));
-            else {
-              nEnded++;
-              ignoredEnded.push({ title: x.snippet.title, at: det.actualEndTime });
-            }
-          } else nNormal++;
-        }
-      }
-
-      if (matchFn && lives.some(matchFn)) break; // 찾았으면 더 안 뒤짐
-      pageToken = pl.nextPageToken;
-      if (!pageToken) break;
+    try {
+      const r = await fetch(
+        'https://www.googleapis.com/youtube/v3/videos?part=snippet&id=' +
+        encodeURIComponent(videoId) + '&key=' + API_KEY
+      );
+      const d = await r.json();
+      if (!d.items || d.items.length === 0) return false;
+      return d.items[0].snippet.liveBroadcastContent === 'live';
+    } catch {
+      return false;
     }
-    dbg('uploads 확인 영상 수: ' + scanned + ' (' + pages + '페이지)');
-    dbg('상태별: 예정 ' + nUpcoming + ' (무시) / 종료됨 ' + nEnded + ' (무시) / 일반 ' + nNormal + ' / 라이브 ' + lives.length);
-    dbg('uploads 라이브: ' + lives.length + '개');
-    return lives;
   }
 
-  // ---------- 방법 2 (비싸다, 100 quota): search.list ----------
-  async function getLiveFromSearch(channelId) {
-    const d = await yt('search', {
-      part: 'snippet', channelId, eventType: 'live', type: 'video', maxResults: 50
-    });
-    const items = d.items || [];
-    const ids = items.map(v => v.id && v.id.videoId).filter(Boolean).slice(0, 50);
-    const out = [];
-    if (ids.length) {
-      // search 결과에는 종료 여부/시청자 정보가 없어서 videos.list로 보강 (1 quota)
-      const vd = await yt('videos', { part: 'snippet,liveStreamingDetails', id: ids.join(',') });
-      for (const x of (vd.items || [])) if (isRealLive(x)) out.push(toLiveItem(x));
-    }
-    dbg('search 라이브: ' + items.length + '개 → 실제 진행 중 ' + out.length + '개');
-    return out;
-  }
-
-  // ---------- 방법 3 (비싸다, 100 quota): channelId 없이 키워드(q)로 search ----------
-  // channelId + eventType=live 조합이 라이브를 못 돌려주는 경우의 우회법.
-  // 전체 유튜브에서 키워드로 라이브를 찾은 뒤, 결과를 이 채널 것만 걸러낸다.
-  async function getLiveFromKeywordSearch(channelId, q) {
-    const d = await yt('search', {
-      part: 'snippet', q, eventType: 'live', type: 'video', maxResults: 50
-    });
-    const items = (d.items || []).filter(v => v.snippet && v.snippet.channelId === channelId);
-    const ids = items.map(v => v.id && v.id.videoId).filter(Boolean);
-    const out = [];
-    if (ids.length) {
-      const vd = await yt('videos', { part: 'snippet,liveStreamingDetails', id: ids.join(',') });
-      for (const x of (vd.items || [])) if (isRealLive(x)) out.push(toLiveItem(x));
-    }
-    dbg('키워드 search: 전체 ' + (d.items || []).length + '개 중 이 채널 ' + items.length + '개 → 실제 진행 중 ' + out.length + '개');
-    return out;
-  }
-
-  // ---------- 필터 ----------
-  const keywordN = norm(keywordParam);
-  const excludesN = excludeParam
-    ? excludeParam.split(',').map(s => norm(s)).filter(Boolean)
-    : [];
-
-  function matches(v) {
-    const t = norm(v.snippet && v.snippet.title);
-    if (keywordN && !t.includes(keywordN)) return false;
-    for (const ex of excludesN) if (t.includes(ex)) return false;
-    return true;
-  }
-
-  // ---------- 화면 ----------
-  function itemsHtml(lives) {
-    return lives.map(v => {
-      const vid = v.id.videoId;
-      const title = v.snippet.title || '';
-      const thumb = (v.snippet.thumbnails && v.snippet.thumbnails.medium && v.snippet.thumbnails.medium.url) || '';
-      return `<a class="live-item" href="javascript:void(0)" onclick="goToVideo('${escHtml(vid)}')">
-        <img class="thumb" src="${escHtml(thumb)}" alt="">
-        <div class="live-info">
-          <div class="live-title">${escHtml(title)}</div>
-          <div class="loading-text" style="margin-top:2px;font-size:11px">${escHtml(liveMeta(v))}</div>
-          <span class="badge-live">LIVE</span>
-        </div>
-      </a>`;
-    }).join('');
+  async function getLiveVideos(channelId) {
+    const r = await fetch(
+      'https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=' +
+      encodeURIComponent(channelId) +
+      '&eventType=live&type=video&maxResults=50&key=' + API_KEY
+    );
+    const d = await r.json();
+    if (d.error) throw new Error(d.error.message);
+    return d.items || [];
   }
 
   function showList(lives, note) {
     if (jsonMode) {
+      // 여러 개여도 JSON 모드는 첫 번째 선택
       const v = lives[0];
       if (v && v.id && v.id.videoId) {
         respondJson({
@@ -446,9 +235,20 @@
       }
       return;
     }
-    const items = itemsHtml(lives);
+    const items = lives.map(v => {
+      const vid = v.id.videoId;
+      const title = v.snippet.title;
+      const thumb = (v.snippet.thumbnails && v.snippet.thumbnails.medium && v.snippet.thumbnails.medium.url) || '';
+      return `<a class="live-item" href="javascript:void(0)" onclick="goToVideo('${vid}')">
+        <img class="thumb" src="${thumb}" alt="">
+        <div class="live-info">
+          <div class="live-title">${title.replace(/</g, '&lt;')}</div>
+          <span class="badge-live">LIVE</span>
+        </div>
+      </a>`;
+    }).join('');
     mainEl.innerHTML =
-      `<div class="loading-text" style="margin-top:0;margin-bottom:4px;color:#666">${escHtml(note)}</div>` +
+      `<div class="loading-text" style="margin-top:0;margin-bottom:4px;color:#666">${note}</div>` +
       `<div class="live-list">${items}</div>`;
   }
 
@@ -463,110 +263,19 @@
     goToVideo(videoId);
   }
 
-  function debugHtml(extraTitles) {
-    if (!debugMode) return '';
-    const lines = debugLog.slice();
-    if (extraTitles && extraTitles.length) {
-      lines.push('가져온 라이브 제목:');
-      extraTitles.forEach(t => lines.push(' - ' + t));
-    }
-    if (ignoredUpcoming.length) {
-      lines.push('예정으로 무시됨 ' + ignoredUpcoming.length + '개:');
-      ignoredUpcoming.slice(0, 30).forEach(u =>
-        lines.push(' - ' + u.title + (u.at ? '  [예정 ' + fmtTime(u.at) + ']' : '')));
-    }
-    if (ignoredEnded.length) {
-      lines.push('종료됨으로 무시됨 ' + ignoredEnded.length + '개:');
-      ignoredEnded.slice(0, 30).forEach(u =>
-        lines.push(' - ' + u.title + (u.at ? '  [종료 ' + fmtTime(u.at) + ']' : '')));
-    }
-    return '<div class="debug">' + lines.map(escHtml).join('<br>') + '</div>';
-  }
-
-  function showNoLive(message, titles, others) {
-    if (jsonMode) {
-      respondJson({ ok: false, error: 'no_live', message: message, titles: titles || [] });
-      return;
-    }
-    // 라이브는 있는데 키워드만 안 맞는 경우, 실제 제목을 항상 보여줘서 키워드를 고를 수 있게 함
-    const titleBlock = (titles && titles.length)
-      ? '<div class="debug">이 채널에서 현재 방송 중인 라이브 제목:<br>' +
-        titles.map(t => ' - ' + escHtml(t)).join('<br>') + '</div>'
-      : '';
-    mainEl.innerHTML = `<div class="error-box">
-      <div class="error-title">현재 라이브 없음</div>
-      <div class="error-msg">${escHtml(message)}</div>
-      ${debugMode ? debugHtml(titles) : titleBlock}
-      <a class="retry-btn" href="https://www.youtube.com/${escHtml(channelParam)}" target="_blank">채널 바로가기</a>
-    </div>` +
-    (others && others.length
-      ? '<div class="loading-text" style="margin:20px 0 4px;color:#888">이 채널의 다른 라이브 · 클릭하면 열려요</div>' +
-        '<div class="live-list" style="margin-top:8px">' + itemsHtml(others) + '</div>'
-      : '');
-  }
-
-  function showError(message) {
-    if (jsonMode) {
-      respondJson({ ok: false, error: 'exception', message: message });
-      return;
-    }
-    let hint = '';
-    if (/quota|rateLimitExceeded|quotaExceeded/i.test(message)) {
-      hint = '<div class="error-msg" style="margin-top:10px;color:#c9a227">' +
-        '💡 YouTube API 일일 quota가 소진됐습니다. 한국 시간 오후 4시경(태평양시 자정)에 초기화됩니다. ' +
-        '그 전에는 URL에 &amp;video=영상ID 를 지정하면 quota 1만 쓰고 바로 연결됩니다.</div>';
-    }
-    mainEl.innerHTML = `<div class="error-box">
-      <div class="error-title">오류 발생</div>
-      <div class="error-msg">${escHtml(message)}</div>
-      ${hint}
-      ${debugHtml()}
-      <a class="retry-btn" href="javascript:location.reload()">다시 시도</a>
-    </div>`;
-  }
-
-  // ---------- 메인 ----------
   async function run() {
     try {
       if (!channelParam) throw new Error('URL에 ?channel=@채널명 을 추가해주세요');
       if (!API_KEY || API_KEY === 'YOUR_API_KEY_HERE') throw new Error('API 키를 설정해주세요');
 
       const channelId = await getChannelId(channelParam);
-      const cacheKey =
-        'yt_live_' + channelId +
-        (keywordParam ? '_' + keywordParam : '') +
-        (excludeParam ? '_ex_' + excludeParam : '');
+      const cacheKey = 'yt_live_' + channelId + (keywordParam ? '_' + keywordParam : '');
 
-      // 키워드(또는 exclude)가 없으면 자동 이동하지 않음 (any=1 이면 허용)
-      const needKeyword = !keywordN && excludesN.length === 0 && !anyMode;
-
-      // 0) video 파라미터로 직접 지정한 경우: 방송 중이면 바로 사용
-      if (videoParam) {
-        try {
-          const vd = await yt('videos', { part: 'snippet', id: videoParam });
-          const it = vd.items && vd.items[0];
-          if (it && it.snippet.liveBroadcastContent === 'live') {
-            pickAndGo({ id: { videoId: it.id }, snippet: it.snippet }, cacheKey, false);
-            return;
-          }
-          dbg('video=' + videoParam + ' 은(는) 현재 방송 중이 아님 → 제목 검색으로 진행');
-        } catch (e) {
-          dbg('video 확인 실패: ' + e.message);
-        }
-      }
-
-      // 1) 캐시 (키워드 없이 들어온 경우엔 캐시로 자동 이동하지 않음)
-      if (!forceRefresh && !needKeyword) {
+      // 1) 캐시 (force 아니면)
+      if (!forceRefresh) {
         const cached = getCache(cacheKey);
         if (cached && cached.videoId) {
-          let stillLive = false;
-          try {
-            stillLive = await isStillLive(cached.videoId);
-          } catch (e) {
-            // quota 등 오류면 캐시를 지우지 말고 일단 캐시된 영상으로 진행
-            dbg('캐시 검증 실패(캐시 사용): ' + e.message);
-            stillLive = true;
-          }
+          const stillLive = await isStillLive(cached.videoId);
           if (stillLive) {
             if (jsonMode) {
               respondJson({
@@ -580,146 +289,73 @@
             goToVideo(cached.videoId);
             return;
           }
-          try { localStorage.removeItem(cacheKey); } catch (_) {}
+          localStorage.removeItem(cacheKey);
         }
       } else {
         try { localStorage.removeItem(cacheKey); } catch (_) {}
       }
 
-      // 2) 싼 방법(업로드 목록)으로 먼저 찾기
-      const errors = [];
-      let lives = [];
-      try {
-        // 키워드 없이 들어온 경우엔 early stop 없이 전부 훑어서 제목 목록을 보여줌
-        lives = await getLiveFromUploads(channelId, needKeyword ? null : matches);
-      } catch (e) {
-        errors.push(e);
-        dbg('uploads 실패: ' + e.message);
-      }
+      // 2) 검색
+      const lives = await getLiveVideos(channelId);
 
-      let hits = lives.filter(matches);
-
-      // 3) 못 찾았을 때만 비싼 search 호출 (100 quota)
-      if (hits.length === 0) {
-        try {
-          const extra = await getLiveFromSearch(channelId);
-          const seen = new Set(lives.map(v => v.id.videoId));
-          for (const v of extra) {
-            if (!seen.has(v.id.videoId)) {
-              lives.push(v);
-              seen.add(v.id.videoId);
-            }
-          }
-          hits = lives.filter(matches);
-        } catch (e) {
-          errors.push(e);
-          dbg('search 실패: ' + e.message);
-        }
-      }
-
-      // 3.5) 그래도 없으면: channelId 없이 키워드(q)로 search → 이 채널 것만 걸러서 사용
-      //      (앞 단계에서 에러가 없었을 때만 — quota 초과 상태에서 또 부르지 않기 위해)
-      if (hits.length === 0 && keywordParam && errors.length === 0) {
-        try {
-          const extra2 = await getLiveFromKeywordSearch(channelId, rawKeyword.trim());
-          const seen2 = new Set(lives.map(v => v.id.videoId));
-          for (const v of extra2) {
-            if (!seen2.has(v.id.videoId)) {
-              lives.push(v);
-              seen2.add(v.id.videoId);
-            }
-          }
-          hits = lives.filter(matches);
-        } catch (e) {
-          errors.push(e);
-          dbg('키워드 search 실패: ' + e.message);
-        }
-      }
-
-      lives.sort(rankSort);
-      hits = lives.filter(matches);
-      const titles = lives.map(describe);
-      dbg('전체 라이브 ' + lives.length + '개 / 조건 일치 ' + hits.length + '개');
-
-      // 4) 결과 없음: 에러가 있었다면 "라이브 없음"이 아니라 에러를 보여준다
-      if (hits.length === 0) {
-        dbg('못 찾음 → 더 깊이: &depth=40 (느림/quota 소모), 확실한 지정: &video=영상ID');
-        if (errors.length > 0) {
-          throw new Error(errors.map(e => e.message).join(' | '));
-        }
-        if (lives.length === 0) {
-          showNoLive(channelParam + ' 채널에 진행 중인 라이브가 없습니다.', titles);
-        } else {
-          // 지도 해석용(json)은 엉뚱한 캠이 캐시되지 않도록 절대 다른 라이브로 넘어가지 않음
-          if (fallbackOpen && !jsonMode) {
-            goToVideo(lives[0].id.videoId);
-            return;
-          }
-          showNoLive(
-            keywordParam
-              ? `"${keywordParam}" 키워드에 맞는 라이브가 없습니다.`
-              : '제외 조건에 맞는 라이브가 없습니다.',
-            titles,
-            lives
-          );
-        }
-        return;
-      }
-
-      // 4.5) 키워드 없음 → 자동 이동 금지. 목록만 보여주거나 JSON으로 제목만 반환
-      if (needKeyword) {
+      if (lives.length === 0) {
         if (jsonMode) {
           respondJson({
             ok: false,
-            error: 'keyword_required',
-            message: 'keyword 파라미터가 필요합니다 (자동 선택 안 함)',
-            titles: hits.map(v => v.snippet && v.snippet.title)
+            error: 'no_live',
+            message: channelParam + ' 채널에 진행 중인 라이브가 없습니다.'
           });
-        } else {
-          showList(hits, '키워드가 지정되지 않아 자동 이동하지 않습니다 · 아래에서 직접 선택하거나 &keyword= 를 추가하세요');
-        }
-        return;
-      }
-
-      // 5) 정확 일치 최우선
-      if (keywordN && excludesN.length === 0) {
-        const exact = hits.find(v => norm(v.snippet.title) === keywordN);
-        if (exact) {
-          pickAndGo(exact, cacheKey, false);
           return;
         }
-      }
-
-      // 6) 1개면 바로 이동
-      if (hits.length === 1) {
-        pickAndGo(hits[0], cacheKey, false);
+        mainEl.innerHTML = `<div class="error-box">
+          <div class="error-title">현재 라이브 없음</div>
+          <div class="error-msg">${channelParam} 채널에 진행 중인 라이브가 없습니다.</div>
+          <a class="retry-btn" href="https://www.youtube.com/${channelParam}" target="_blank">채널 바로가기</a>
+        </div>`;
         return;
       }
 
-      // 6.5) 시청자 수가 잡히는 라이브가 딱 하나면 그게 진짜 라이브 → 자동 선택
-      //      pick=latest 이면 정렬 1순위(시청자 있음 → 최근 시작)를 자동 선택
-      const withViewers = hits.filter(v => viewersOf(v) != null);
-      if (pickLatest || withViewers.length === 1) {
-        pickAndGo(pickLatest ? hits[0] : withViewers[0], cacheKey, false);
+      if (keywordParam) {
+      // 제목 전체가 키워드와 정확히 일치하면 최우선 선택
+      const exact = lives.find(v =>
+        (v.snippet.title || '').toLowerCase() === keywordParam
+      );
+    
+      if (exact) {
+        pickAndGo(exact, cacheKey, false);
         return;
       }
-
-      // 7) 여러 개
-      if (embedMode || jsonMode) {
-        pickAndGo(hits[0], cacheKey, false);
+    
+      // 정확히 일치하는 제목이 없으면 기존처럼 부분 일치 검색
+      const filtered = lives.filter(v =>
+        (v.snippet.title || '').toLowerCase().includes(keywordParam)
+      );
+    
+      if (filtered.length === 1) {
+        pickAndGo(filtered[0], cacheKey, false);
         return;
       }
-      const note = keywordParam
-        ? `"${keywordParam}" 관련 라이브 ${hits.length}개`
-        : (excludeParam
-            ? `제외 필터 적용 · 라이브 ${hits.length}개`
-            : `라이브 ${hits.length}개 — 선택해주세요`);
-      showList(hits, note);
-
-    } catch (e) {
-      showError(e.message || String(e));
+    
+      if (filtered.length > 1) {
+        // embed / json 은 첫 번째 자동 선택
+        if (embedMode || jsonMode) {
+          pickAndGo(filtered[0], cacheKey, false);
+          return;
+        }
+    
+        showList(filtered, `"${keywordParam}" 관련 라이브 ${filtered.length}개`);
+        return;
+      }
+    
+      // 키워드 매칭 없음
+      if ((embedMode || jsonMode) && lives.length >= 1) {
+        pickAndGo(lives[0], cacheKey, false);
+        return;
+      }
+    
+      showList(lives, `"${keywordParam}" 매칭 없음 — 전체 라이브 ${lives.length}개`);
+      return;
     }
-  }
 
   run();
 </script>

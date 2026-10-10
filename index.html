@@ -100,6 +100,9 @@
   const anyMode = params.get('any') === '1' || params.get('any') === 'true';
   // &pick=latest : 여러 개가 걸리면 목록 대신 "가장 진짜 같은 최신 라이브"를 자동 선택
   const pickLatest = params.get('pick') === 'latest';
+  // &fallback=1 : 키워드에 맞는 라이브가 없을 때, 이 채널의 다른 라이브(가장 진짜 같은 것)를 자동으로 열기
+  //               (기본은 목록만 보여주고 클릭해서 열기. 지도 해석용 format=json 에서는 절대 적용 안 됨)
+  const fallbackOpen = params.get('fallback') === '1' || params.get('fallback') === 'true';
   const excludeParam = (params.get('exclude') || '').toLowerCase().trim();
   const embedMode = params.get('embed') === '1' || params.get('embed') === 'true';
   const jsonMode = params.get('format') === 'json';
@@ -392,6 +395,22 @@
   }
 
   // ---------- 화면 ----------
+  function itemsHtml(lives) {
+    return lives.map(v => {
+      const vid = v.id.videoId;
+      const title = v.snippet.title || '';
+      const thumb = (v.snippet.thumbnails && v.snippet.thumbnails.medium && v.snippet.thumbnails.medium.url) || '';
+      return `<a class="live-item" href="javascript:void(0)" onclick="goToVideo('${escHtml(vid)}')">
+        <img class="thumb" src="${escHtml(thumb)}" alt="">
+        <div class="live-info">
+          <div class="live-title">${escHtml(title)}</div>
+          <div class="loading-text" style="margin-top:2px;font-size:11px">${escHtml(liveMeta(v))}</div>
+          <span class="badge-live">LIVE</span>
+        </div>
+      </a>`;
+    }).join('');
+  }
+
   function showList(lives, note) {
     if (jsonMode) {
       const v = lives[0];
@@ -408,19 +427,7 @@
       }
       return;
     }
-    const items = lives.map(v => {
-      const vid = v.id.videoId;
-      const title = v.snippet.title || '';
-      const thumb = (v.snippet.thumbnails && v.snippet.thumbnails.medium && v.snippet.thumbnails.medium.url) || '';
-      return `<a class="live-item" href="javascript:void(0)" onclick="goToVideo('${escHtml(vid)}')">
-        <img class="thumb" src="${escHtml(thumb)}" alt="">
-        <div class="live-info">
-          <div class="live-title">${escHtml(title)}</div>
-          <div class="loading-text" style="margin-top:2px;font-size:11px">${escHtml(liveMeta(v))}</div>
-          <span class="badge-live">LIVE</span>
-        </div>
-      </a>`;
-    }).join('');
+    const items = itemsHtml(lives);
     mainEl.innerHTML =
       `<div class="loading-text" style="margin-top:0;margin-bottom:4px;color:#666">${escHtml(note)}</div>` +
       `<div class="live-list">${items}</div>`;
@@ -457,7 +464,7 @@
     return '<div class="debug">' + lines.map(escHtml).join('<br>') + '</div>';
   }
 
-  function showNoLive(message, titles) {
+  function showNoLive(message, titles, others) {
     if (jsonMode) {
       respondJson({ ok: false, error: 'no_live', message: message, titles: titles || [] });
       return;
@@ -472,7 +479,11 @@
       <div class="error-msg">${escHtml(message)}</div>
       ${debugMode ? debugHtml(titles) : titleBlock}
       <a class="retry-btn" href="https://www.youtube.com/${escHtml(channelParam)}" target="_blank">채널 바로가기</a>
-    </div>`;
+    </div>` +
+    (others && others.length
+      ? '<div class="loading-text" style="margin:20px 0 4px;color:#888">이 채널의 다른 라이브 · 클릭하면 열려요</div>' +
+        '<div class="live-list" style="margin-top:8px">' + itemsHtml(others) + '</div>'
+      : '');
   }
 
   function showError(message) {
@@ -600,11 +611,17 @@
         if (lives.length === 0) {
           showNoLive(channelParam + ' 채널에 진행 중인 라이브가 없습니다.', titles);
         } else {
+          // 지도 해석용(json)은 엉뚱한 캠이 캐시되지 않도록 절대 다른 라이브로 넘어가지 않음
+          if (fallbackOpen && !jsonMode) {
+            goToVideo(lives[0].id.videoId);
+            return;
+          }
           showNoLive(
             keywordParam
               ? `"${keywordParam}" 키워드에 맞는 라이브가 없습니다.`
               : '제외 조건에 맞는 라이브가 없습니다.',
-            titles
+            titles,
+            lives
           );
         }
         return;

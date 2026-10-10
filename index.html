@@ -503,14 +503,16 @@
       return;
     }
     // 라이브는 있는데 키워드만 안 맞는 경우, 실제 제목을 항상 보여줘서 키워드를 고를 수 있게 함
-    const titleBlock = (titles && titles.length)
+    // 아래에 "다른 라이브" 목록이 이미 나오면 제목 텍스트는 중복이라 생략
+    const hasOthers = !!(others && others.length);
+    const titleBlock = (!hasOthers && titles && titles.length)
       ? '<div class="debug">이 채널에서 현재 방송 중인 라이브 제목:<br>' +
         titles.map(t => ' - ' + escHtml(t)).join('<br>') + '</div>'
       : '';
     mainEl.innerHTML = `<div class="error-box">
       <div class="error-title">현재 라이브 없음</div>
       <div class="error-msg">${escHtml(message)}</div>
-      ${debugMode ? debugHtml(titles) : titleBlock}
+      ${debugMode ? debugHtml(hasOthers ? [] : titles) : titleBlock}
       <a class="retry-btn" href="https://www.youtube.com/${escHtml(channelParam)}" target="_blank">채널 바로가기</a>
     </div>` +
     (others && others.length

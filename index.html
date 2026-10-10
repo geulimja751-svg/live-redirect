@@ -98,6 +98,8 @@
   const keywordParam = rawKeyword.toLowerCase().trim();
   // &any=1 : 키워드 없이도 아무 라이브나 자동 선택 허용 (기본은 키워드 필수)
   const anyMode = params.get('any') === '1' || params.get('any') === 'true';
+  // &pick=latest : 여러 개가 걸리면 목록 대신 "가장 진짜 같은 최신 라이브"를 자동 선택
+  const pickLatest = params.get('pick') === 'latest';
   const excludeParam = (params.get('exclude') || '').toLowerCase().trim();
   const embedMode = params.get('embed') === '1' || params.get('embed') === 'true';
   const jsonMode = params.get('format') === 'json';
@@ -105,8 +107,8 @@
   const debugMode = params.get('debug') === '1' || params.get('debug') === 'true';
   // &video=영상ID : 방송 중이면 이 영상을 최우선으로 사용 (가장 확실, quota 1)
   const videoParam = (params.get('video') || '').trim();
-  // &depth=페이지수 : 업로드 목록을 몇 페이지(50개씩)까지 볼지 (기본 20, 최대 40)
-  const MAX_PAGES = Math.min(Math.max(parseInt(params.get('depth'), 10) || 20, 1), 40);
+  // &depth=페이지수 : 업로드 목록을 몇 페이지(50개씩)까지 볼지 (기본 40 = 2000개, 최대 100 = 5000개)
+  const MAX_PAGES = Math.min(Math.max(parseInt(params.get('depth'), 10) || 40, 1), 100);
 
   if (jsonMode) {
     document.getElementById('uiRoot').style.display = 'none';
@@ -146,6 +148,48 @@
   function dbg(msg) {
     debugLog.push(msg);
     console.log('[live]', msg);
+  }
+
+  // ---------- 라이브 판별 / 정렬 ----------
+  // liveBroadcastContent가 'live'여도 이미 종료된 방송(actualEndTime 있음)은 제외
+  function isRealLive(x) {
+    if (!x || !x.snippet) return false;
+    if (x.snippet.liveBroadcastContent !== 'live') return false;
+    const d = x.liveStreamingDetails || {};
+    return !d.actualEndTime;
+  }
+  function toLiveItem(x) {
+    return { id: { videoId: x.id }, snippet: x.snippet, live: x.liveStreamingDetails || {} };
+  }
+  function viewersOf(v) {
+    const raw = v.live && v.live.concurrentViewers;
+    if (raw == null || raw === '') return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }
+  function startOf(v) {
+    const t = Date.parse(v.live && v.live.actualStartTime);
+    return Number.isFinite(t) ? t : 0;
+  }
+  // 시청자 수가 잡히는 것 우선, 그다음 가장 최근에 시작한 것 우선
+  function rankSort(a, b) {
+    const ha = viewersOf(a) != null ? 1 : 0;
+    const hb = viewersOf(b) != null ? 1 : 0;
+    if (ha !== hb) return hb - ha;
+    return startOf(b) - startOf(a);
+  }
+  function liveMeta(v) {
+    const parts = [];
+    const st = startOf(v);
+    if (st) parts.push('시작 ' + new Date(st).toLocaleString('ko-KR', {
+      month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
+    }));
+    const n = viewersOf(v);
+    parts.push(n != null ? '시청 ' + n.toLocaleString('ko-KR') + '명' : '시청자 정보 없음');
+    return parts.join(' · ');
+  }
+  function describe(v) {
+    return (v.snippet && v.snippet.title || '') + '  [' + liveMeta(v) + ']';
   }
 
   function getCache(key) {
@@ -252,20 +296,23 @@
   // ---------- 라이브 여부 확인 ----------
   // 에러(quota 등)는 "종료"로 오판하지 않고 위로 던진다
   async function isStillLive(videoId) {
-    const d = await yt('videos', { part: 'snippet', id: videoId });
+    const d = await yt('videos', { part: 'snippet,liveStreamingDetails', id: videoId });
     if (!d.items || d.items.length === 0) return false;
-    return d.items[0].snippet.liveBroadcastContent === 'live';
+    return isRealLive(d.items[0]);
   }
 
   // ---------- 방법 1 (싸다): 업로드 재생목록 + videos.list ----------
   // 페이지(50개)마다 videos.list로 확인하고, 조건에 맞는 라이브를 찾으면 바로 중단
-  // 최대 depth 페이지(기본 20 = 1000개). 페이지당 약 2 quota
+  // 최대 depth 페이지(기본 40 = 2000개). 페이지당 약 2 quota
   async function getLiveFromUploads(channelId, matchFn) {
     const uploadsId = 'UU' + channelId.slice(2);
     const lives = [];
     let pageToken;
     let scanned = 0;
     let pages = 0;
+    let nUpcoming = 0;   // 예정(아직 시작 전) 방송
+    let nEnded = 0;      // 'live'로 표시되지만 종료 시각이 있는 방송
+    let nNormal = 0;     // 일반 영상/종료된 방송 (liveBroadcastContent = none)
     for (let i = 0; i < MAX_PAGES; i++) {
       const q = { part: 'contentDetails', playlistId: uploadsId, maxResults: 50 };
       if (pageToken) q.pageToken = pageToken;
@@ -277,11 +324,15 @@
       scanned += ids.length;
 
       if (ids.length > 0) {
-        const v = await yt('videos', { part: 'snippet', id: ids.join(',') });
+        const v = await yt('videos', { part: 'snippet,liveStreamingDetails', id: ids.join(',') });
+        // 제목이 아니라 "방송 상태"로 판별 (videos.list 1 quota / 50개)
         for (const x of (v.items || [])) {
-          if (x.snippet && x.snippet.liveBroadcastContent === 'live') {
-            lives.push({ id: { videoId: x.id }, snippet: x.snippet });
-          }
+          const st = x.snippet && x.snippet.liveBroadcastContent;
+          if (st === 'upcoming') nUpcoming++;
+          else if (st === 'live') {
+            if (isRealLive(x)) lives.push(toLiveItem(x));
+            else nEnded++;
+          } else nNormal++;
         }
       }
 
@@ -290,6 +341,7 @@
       if (!pageToken) break;
     }
     dbg('uploads 확인 영상 수: ' + scanned + ' (' + pages + '페이지)');
+    dbg('상태별: 예정 ' + nUpcoming + ' (무시) / 종료됨 ' + nEnded + ' (무시) / 일반 ' + nNormal + ' / 라이브 ' + lives.length);
     dbg('uploads 라이브: ' + lives.length + '개');
     return lives;
   }
@@ -300,8 +352,15 @@
       part: 'snippet', channelId, eventType: 'live', type: 'video', maxResults: 50
     });
     const items = d.items || [];
-    dbg('search 라이브: ' + items.length + '개');
-    return items;
+    const ids = items.map(v => v.id && v.id.videoId).filter(Boolean).slice(0, 50);
+    const out = [];
+    if (ids.length) {
+      // search 결과에는 종료 여부/시청자 정보가 없어서 videos.list로 보강 (1 quota)
+      const vd = await yt('videos', { part: 'snippet,liveStreamingDetails', id: ids.join(',') });
+      for (const x of (vd.items || [])) if (isRealLive(x)) out.push(toLiveItem(x));
+    }
+    dbg('search 라이브: ' + items.length + '개 → 실제 진행 중 ' + out.length + '개');
+    return out;
   }
 
   // ---------- 필터 ----------
@@ -342,6 +401,7 @@
         <img class="thumb" src="${escHtml(thumb)}" alt="">
         <div class="live-info">
           <div class="live-title">${escHtml(title)}</div>
+          <div class="loading-text" style="margin-top:2px;font-size:11px">${escHtml(liveMeta(v))}</div>
           <span class="badge-live">LIVE</span>
         </div>
       </a>`;
@@ -502,7 +562,9 @@
         }
       }
 
-      const titles = lives.map(v => v.snippet && v.snippet.title);
+      lives.sort(rankSort);
+      hits = lives.filter(matches);
+      const titles = lives.map(describe);
       dbg('전체 라이브 ' + lives.length + '개 / 조건 일치 ' + hits.length + '개');
 
       // 4) 결과 없음: 에러가 있었다면 "라이브 없음"이 아니라 에러를 보여준다
@@ -550,6 +612,14 @@
       // 6) 1개면 바로 이동
       if (hits.length === 1) {
         pickAndGo(hits[0], cacheKey, false);
+        return;
+      }
+
+      // 6.5) 시청자 수가 잡히는 라이브가 딱 하나면 그게 진짜 라이브 → 자동 선택
+      //      pick=latest 이면 정렬 1순위(시청자 있음 → 최근 시작)를 자동 선택
+      const withViewers = hits.filter(v => viewersOf(v) != null);
+      if (pickLatest || withViewers.length === 1) {
+        pickAndGo(pickLatest ? hits[0] : withViewers[0], cacheKey, false);
         return;
       }
 

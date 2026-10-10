@@ -110,8 +110,9 @@
   const debugMode = params.get('debug') === '1' || params.get('debug') === 'true';
   // &video=영상ID : 방송 중이면 이 영상을 최우선으로 사용 (가장 확실, quota 1)
   const videoParam = (params.get('video') || '').trim();
-  // &depth=페이지수 : 업로드 목록을 몇 페이지(50개씩)까지 볼지 (기본 40 = 2000개, 최대 100 = 5000개)
-  const MAX_PAGES = Math.min(Math.max(parseInt(params.get('depth'), 10) || 40, 1), 100);
+  // &depth=페이지수 : 업로드 목록을 몇 페이지(50개씩)까지 볼지
+  // 기본 4 = 최근 200개 (갓 시작한 방송 위주로 빠르게). 깊게 찾으려면 &depth=40 처럼 직접 지정 (느리고 quota 소모)
+  const MAX_PAGES = Math.min(Math.max(parseInt(params.get('depth'), 10) || 4, 1), 100);
 
   if (jsonMode) {
     document.getElementById('uiRoot').style.display = 'none';
@@ -315,7 +316,7 @@
 
   // ---------- 방법 1 (싸다): 업로드 재생목록 + videos.list ----------
   // 페이지(50개)마다 videos.list로 확인하고, 조건에 맞는 라이브를 찾으면 바로 중단
-  // 최대 depth 페이지(기본 40 = 2000개). 페이지당 약 2 quota
+  // 최대 depth 페이지(기본 4 = 200개). 페이지당 약 2 quota
   async function getLiveFromUploads(channelId, matchFn) {
     const uploadsId = 'UU' + channelId.slice(2);
     const lives = [];
@@ -378,6 +379,24 @@
       for (const x of (vd.items || [])) if (isRealLive(x)) out.push(toLiveItem(x));
     }
     dbg('search 라이브: ' + items.length + '개 → 실제 진행 중 ' + out.length + '개');
+    return out;
+  }
+
+  // ---------- 방법 3 (비싸다, 100 quota): channelId 없이 키워드(q)로 search ----------
+  // channelId + eventType=live 조합이 라이브를 못 돌려주는 경우의 우회법.
+  // 전체 유튜브에서 키워드로 라이브를 찾은 뒤, 결과를 이 채널 것만 걸러낸다.
+  async function getLiveFromKeywordSearch(channelId, q) {
+    const d = await yt('search', {
+      part: 'snippet', q, eventType: 'live', type: 'video', maxResults: 50
+    });
+    const items = (d.items || []).filter(v => v.snippet && v.snippet.channelId === channelId);
+    const ids = items.map(v => v.id && v.id.videoId).filter(Boolean);
+    const out = [];
+    if (ids.length) {
+      const vd = await yt('videos', { part: 'snippet,liveStreamingDetails', id: ids.join(',') });
+      for (const x of (vd.items || [])) if (isRealLive(x)) out.push(toLiveItem(x));
+    }
+    dbg('키워드 search: 전체 ' + (d.items || []).length + '개 중 이 채널 ' + items.length + '개 → 실제 진행 중 ' + out.length + '개');
     return out;
   }
 
@@ -598,6 +617,25 @@
         }
       }
 
+      // 3.5) 그래도 없으면: channelId 없이 키워드(q)로 search → 이 채널 것만 걸러서 사용
+      //      (앞 단계에서 에러가 없었을 때만 — quota 초과 상태에서 또 부르지 않기 위해)
+      if (hits.length === 0 && keywordParam && errors.length === 0) {
+        try {
+          const extra2 = await getLiveFromKeywordSearch(channelId, rawKeyword.trim());
+          const seen2 = new Set(lives.map(v => v.id.videoId));
+          for (const v of extra2) {
+            if (!seen2.has(v.id.videoId)) {
+              lives.push(v);
+              seen2.add(v.id.videoId);
+            }
+          }
+          hits = lives.filter(matches);
+        } catch (e) {
+          errors.push(e);
+          dbg('키워드 search 실패: ' + e.message);
+        }
+      }
+
       lives.sort(rankSort);
       hits = lives.filter(matches);
       const titles = lives.map(describe);
@@ -605,6 +643,7 @@
 
       // 4) 결과 없음: 에러가 있었다면 "라이브 없음"이 아니라 에러를 보여준다
       if (hits.length === 0) {
+        dbg('못 찾음 → 더 깊이: &depth=40 (느림/quota 소모), 확실한 지정: &video=영상ID');
         if (errors.length > 0) {
           throw new Error(errors.map(e => e.message).join(' | '));
         }

@@ -75,6 +75,8 @@
     }
     .retry-btn:hover { background:#2a2a2a; }
   </style>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 </head>
 <body>
 <div class="container" id="uiRoot">
@@ -85,6 +87,21 @@
 <script>
   // ⚠️ 새로 발급한 키를 넣으세요. (Cloud Console에서 HTTP 리퍼러 + YouTube Data API v3 제한 필수)
   const API_KEY = 'AIzaSyBbGHS7EXSuj1t9V187FIr1flIfDMec3xA';
+
+  // ===== Firebase (지도와 동일한 프로젝트, channelIds만 사용) =====
+  const firebaseConfig = {
+    apiKey: "AIzaSyCAFEyCv7sOXTt1A98Q1tezWNfrnvBJ2K4",
+    authDomain: "livecamdb.firebaseapp.com",
+    projectId: "livecamdb",
+    storageBucket: "livecamdb.firebasestorage.app",
+    messagingSenderId: "898695223064",
+    appId: "1:898695223064:web:eb2f1e3cb388aa4fa2b06d",
+    measurementId: "G-3LPSV6SZGT"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+  const CHANNEL_IDS_DOC = db.collection('livecam').doc('channelIds');
+
   const params = new URLSearchParams(location.search);
   const channelParam = params.get('channel') || '';
   // keyword에 인코딩 안 된 '#'이 들어가면 브라우저가 뒤쪽을 hash로 잘라버림
@@ -272,18 +289,67 @@
       location.href = webUrl;
     }
   }
-  // ---------- 채널 ID ----------
+  // ---------- 채널 ID (Firebase + localStorage 캐시) ----------
+  function normalizeHandle(input) {
+    let h = String(input || '').trim();
+    if (h.startsWith('@')) h = h.slice(1);
+    return h.toLowerCase();
+  }
+
+  async function getChannelIdFromFirebase(handleKey) {
+    try {
+      const snap = await CHANNEL_IDS_DOC.get();
+      if (!snap.exists) return null;
+      const data = snap.data() || {};
+      const uc = data[handleKey];
+      if (uc && /^UC[\w-]{22}$/.test(uc)) return uc;
+      return null;
+    } catch (e) {
+      dbg('Firebase channelIds 조회 실패: ' + e.message);
+      return null;
+    }
+  }
+
+  async function saveChannelIdToFirebase(handleKey, ucId) {
+    try {
+      await CHANNEL_IDS_DOC.set({ [handleKey]: ucId }, { merge: true });
+      dbg('Firebase에 UC 저장: ' + handleKey + ' → ' + ucId);
+    } catch (e) {
+      dbg('Firebase channelIds 저장 실패: ' + e.message);
+    }
+  }
+
   async function getChannelId(input) {
     // 이미 UC... 형식이면 API 호출 불필요
     if (/^UC[\w-]{22}$/.test(input)) return input;
-    const cacheKey = 'yt_ch_' + input;
-    const cached = getCache(cacheKey);
-    if (cached) return cached;
+
+    const handleKey = normalizeHandle(input);
+    const localCacheKey = 'yt_ch_' + handleKey;
+
+    // 1) localStorage
+    const localCached = getCache(localCacheKey);
+    if (localCached && /^UC[\w-]{22}$/.test(localCached)) {
+      dbg('채널 ID localStorage 캐시: ' + localCached);
+      return localCached;
+    }
+
+    // 2) Firebase
+    const fromFb = await getChannelIdFromFirebase(handleKey);
+    if (fromFb) {
+      setCache(localCacheKey, fromFb);
+      dbg('채널 ID Firebase 캐시: ' + fromFb);
+      return fromFb;
+    }
+
+    // 3) YouTube API
     const h = input.startsWith('@') ? input.slice(1) : input;
     const d = await yt('channels', { part: 'id', forHandle: h });
     if (d.items && d.items.length > 0) {
       const id = d.items[0].id;
-      setCache(cacheKey, id);
+      setCache(localCacheKey, id);
+      // 비동기로 저장 (응답 지연 방지)
+      saveChannelIdToFirebase(handleKey, id);
+      dbg('채널 ID API 조회 후 저장: ' + id);
       return id;
     }
     throw new Error('채널을 찾을 수 없습니다: ' + input);
